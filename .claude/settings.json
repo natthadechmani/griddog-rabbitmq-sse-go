@@ -25,7 +25,8 @@
       "Bash(chmod +x .githooks/pre-push)",
       "Bash(git config *)",
       "Bash(echo \"core.hooksPath = $\\(git config core.hooksPath\\)\")",
-      "Bash(sh .githooks/pre-push)"
+      "Bash(sh .githooks/pre-push)",
+      "Bash(go list *)"
     ]
   }
 }

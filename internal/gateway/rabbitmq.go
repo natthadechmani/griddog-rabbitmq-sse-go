@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/google/uuid"
 
 	"griddog/internal/db"
@@ -72,14 +73,23 @@ func (s *Server) StartCompletedConsumer(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				if !s.pending.deliver(d.CorrelationId, d.Body) {
-					log.Printf("no waiter for correlation_id=%s", d.CorrelationId)
-				}
-				_ = d.Ack(false)
+				s.handleCompleted(d)
 			}
 		}
 	}()
 	return nil
+}
+
+// handleCompleted routes a completed-queue reply to the waiting request handler,
+// wrapped in an APM consume span + inbound DSM checkpoint (terminal hop of the
+// flow-2 pathway, so the ctx isn't threaded onward).
+func (s *Server) handleCompleted(d amqp.Delivery) {
+	span, _ := rabbitmq.StartConsumeSpan(d, rabbitmq.CompletedQueue)
+	defer span.Finish()
+	if !s.pending.deliver(d.CorrelationId, d.Body) {
+		log.Printf("no waiter for correlation_id=%s", d.CorrelationId)
+	}
+	_ = d.Ack(false)
 }
 
 // flowRequest is the body for both /rabbitmq-call and /http-call.
@@ -108,7 +118,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 	replyCh := s.pending.register(corrID)
 
 	body, _ := json.Marshal(task)
-	if err := rabbitmq.Publish(ctx, s.ch, rabbitmq.ProcessingQueue, corrID, body); err != nil {
+	if err := rabbitmq.Publish(ctx, s.ch, "", rabbitmq.ProcessingQueue, corrID, body); err != nil {
 		s.pending.cancel(corrID)
 		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "publish failed"})
 		return

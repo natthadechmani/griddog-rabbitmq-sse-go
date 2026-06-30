@@ -30,14 +30,19 @@ func (s *Server) StartConsumer(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				s.handleDelivery(ctx, d)
+				s.handleDelivery(d)
 			}
 		}
 	}()
 	return nil
 }
 
-func (s *Server) handleDelivery(ctx context.Context, d amqp.Delivery) {
+func (s *Server) handleDelivery(d amqp.Delivery) {
+	// APM consume span + inbound DSM checkpoint; ctx carries both forward so the
+	// downstream publish continues the same trace and DSM pathway.
+	span, ctx := rabbitmq.StartConsumeSpan(d, rabbitmq.ProcessingQueue)
+	defer span.Finish()
+
 	var task models.Task
 	if err := json.Unmarshal(d.Body, &task); err != nil {
 		log.Printf("bad task message: %v", err)
@@ -65,7 +70,7 @@ func (s *Server) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	}
 	body, _ := json.Marshal(enriched)
 
-	if err := rabbitmq.Publish(ctx, s.ch, rabbitmq.CompletedQueue, task.CorrelationID, body); err != nil {
+	if err := rabbitmq.Publish(ctx, s.ch, "", rabbitmq.CompletedQueue, task.CorrelationID, body); err != nil {
 		log.Printf("publish completed-queue error: %v", err)
 		_ = d.Nack(false, true) // requeue for another attempt
 		return
