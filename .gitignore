@@ -1,0 +1,10 @@
+# Go
+/bin/
+*.out
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+
+# Env
+.env

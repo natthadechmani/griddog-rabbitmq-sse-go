@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(docker compose *)",
+      "Bash(curl -s http://localhost:8080/api/health)",
+      "Bash(curl -s http://localhost:8088/api/health)",
+      "Bash(curl -s -X POST http://localhost:8080/api/rabbitmq-call -H 'content-type: application/json' -d '{\"value\":7}')",
+      "Bash(curl -s -X POST http://localhost:8080/api/http-call -H 'content-type: application/json' -d '{\"value\":9}')",
+      "Bash(curl -s 'http://localhost:8080/api/messages?flow=rabbitmq')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s 'http://localhost:8080/api/messages?flow=http')",
+      "Bash(python3 -c 'import sys,json;print\\(len\\(json.load\\(sys.stdin\\)\\)\\)')",
+      "Bash(curl -sN --max-time 3 http://localhost:8080/api/sse-call)",
+      "Bash(curl -sN --max-time 3 http://localhost:8088/api/sse-call)"
+    ]
+  }
+}
