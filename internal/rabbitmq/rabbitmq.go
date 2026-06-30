@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"sort"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -12,6 +14,8 @@ import (
 	"github.com/DataDog/dd-trace-go/v2/datastreams/options"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
+
+	"griddog/internal/logx"
 )
 
 // Queue names shared by both services.
@@ -121,6 +125,9 @@ func StartConsumeSpan(d amqp.Delivery, queue string) (*tracer.Span, context.Cont
 	)
 	ctx := tracer.ContextWithSpan(context.Background(), span)
 
+	// Dump the raw propagated headers, trace-correlated to this consume span.
+	logCarrierHeaders(ctx, queue, d.Headers)
+
 	// 2. DSM: extract the upstream pathway from headers, then set the inbound
 	//    checkpoint, threaded onto the span's ctx.
 	ctx, _ = tracer.SetDataStreamsCheckpointWithParams(
@@ -143,4 +150,28 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// logCarrierHeaders prints every header on an incoming delivery when
+// LOG_AMQP_HEADERS is set. This surfaces the propagated context that travels in
+// the message: the APM trace context (x-datadog-* and W3C traceparent/tracestate)
+// and the DSM pathway (dd-pathway-ctx-base64).
+func logCarrierHeaders(ctx context.Context, queue string, headers amqp.Table) {
+	if os.Getenv("LOG_AMQP_HEADERS") == "" {
+		return
+	}
+	// Raw Go-syntax dump of the full headers map (exactly:
+	// log.Printf("amqp headers: %#v", d.Headers)), trace-correlated via logx.
+	logx.Printf(ctx, "amqp headers (%s): %#v", queue, headers)
+
+	// Readable, sorted key/value view (each line also trace-correlated).
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	logx.Printf(ctx, "[amqp headers] consume %q — %d header(s):", queue, len(headers))
+	for _, k := range keys {
+		logx.Printf(ctx, "    %s = %v", k, headers[k])
+	}
 }

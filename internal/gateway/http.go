@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"griddog/internal/db"
 	"griddog/internal/httpx"
+	"griddog/internal/logx"
 	"griddog/internal/models"
 )
 
@@ -31,9 +31,11 @@ func (s *Server) handleHTTPCall(w http.ResponseWriter, r *http.Request) {
 	corrID := uuid.NewString()
 	task := models.Task{CorrelationID: corrID, Value: req.Value, CreatedAt: time.Now()}
 
+	logx.Printf(ctx, "flow3 http-call received value=%d correlation_id=%s", req.Value, corrID)
+
 	// gateway request_in
 	if err := db.InsertLog(ctx, s.db, "http", corrID, "gateway", "request_in", map[string]any{"value": req.Value}); err != nil {
-		log.Printf("http request_in log error: %v", err)
+		logx.Printf(ctx, "http request_in log error: %v", err)
 	}
 
 	body, _ := json.Marshal(task)
@@ -64,7 +66,7 @@ func (s *Server) handleHTTPCall(w http.ResponseWriter, r *http.Request) {
 
 	// gateway response_out
 	if err := db.InsertLog(ctx, s.db, "http", corrID, "gateway", "response_out", out); err != nil {
-		log.Printf("http response_out log error: %v", err)
+		logx.Printf(ctx, "http response_out log error: %v", err)
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, out)

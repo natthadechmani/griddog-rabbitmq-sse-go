@@ -14,6 +14,7 @@ import (
 
 	"griddog/internal/db"
 	"griddog/internal/httpx"
+	"griddog/internal/logx"
 	"griddog/internal/models"
 	"griddog/internal/rabbitmq"
 )
@@ -84,10 +85,10 @@ func (s *Server) StartCompletedConsumer(ctx context.Context) error {
 // wrapped in an APM consume span + inbound DSM checkpoint (terminal hop of the
 // flow-2 pathway, so the ctx isn't threaded onward).
 func (s *Server) handleCompleted(d amqp.Delivery) {
-	span, _ := rabbitmq.StartConsumeSpan(d, rabbitmq.CompletedQueue)
+	span, ctx := rabbitmq.StartConsumeSpan(d, rabbitmq.CompletedQueue)
 	defer span.Finish()
 	if !s.pending.deliver(d.CorrelationId, d.Body) {
-		log.Printf("no waiter for correlation_id=%s", d.CorrelationId)
+		logx.Printf(ctx, "no waiter for correlation_id=%s", d.CorrelationId)
 	}
 	_ = d.Ack(false)
 }
@@ -109,9 +110,11 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 	corrID := uuid.NewString()
 	task := models.Task{CorrelationID: corrID, Value: req.Value, CreatedAt: time.Now()}
 
+	logx.Printf(ctx, "flow2 rabbitmq-call received value=%d correlation_id=%s", req.Value, corrID)
+
 	// log the API request (req)
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "request_in", map[string]any{"value": req.Value}); err != nil {
-		log.Printf("request_in log error: %v", err)
+		logx.Printf(ctx, "request_in log error: %v", err)
 	}
 
 	// register the waiter BEFORE publishing to avoid a race with a fast reply
@@ -125,7 +128,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 	}
 	// log the queue message
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "queue_published", task); err != nil {
-		log.Printf("queue_published log error: %v", err)
+		logx.Printf(ctx, "queue_published log error: %v", err)
 	}
 
 	select {
@@ -134,7 +137,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(replyBody, &enriched)
 		// message in (consumed from completed-queue)
 		if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "completed_consumed", enriched); err != nil {
-			log.Printf("completed_consumed log error: %v", err)
+			logx.Printf(ctx, "completed_consumed log error: %v", err)
 		}
 		resp := map[string]any{
 			"correlation_id": corrID,
@@ -143,7 +146,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 		}
 		// message out (response to browser)
 		if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "response_out", resp); err != nil {
-			log.Printf("response_out log error: %v", err)
+			logx.Printf(ctx, "response_out log error: %v", err)
 		}
 		httpx.WriteJSON(w, http.StatusOK, resp)
 	case <-time.After(15 * time.Second):

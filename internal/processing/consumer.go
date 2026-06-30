@@ -9,6 +9,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"griddog/internal/db"
+	"griddog/internal/logx"
 	"griddog/internal/models"
 	"griddog/internal/rabbitmq"
 )
@@ -45,7 +46,7 @@ func (s *Server) handleDelivery(d amqp.Delivery) {
 
 	var task models.Task
 	if err := json.Unmarshal(d.Body, &task); err != nil {
-		log.Printf("bad task message: %v", err)
+		logx.Printf(ctx, "bad task message: %v", err)
 		_ = d.Nack(false, false) // drop malformed message
 		return
 	}
@@ -53,9 +54,11 @@ func (s *Server) handleDelivery(d amqp.Delivery) {
 		task.CorrelationID = d.CorrelationId
 	}
 
+	logx.Printf(ctx, "flow2 consumed correlation_id=%s value=%d", task.CorrelationID, task.Value)
+
 	// message in
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", task.CorrelationID, "processing", "queue_consumed", task); err != nil {
-		log.Printf("queue_consumed log error: %v", err)
+		logx.Printf(ctx, "queue_consumed log error: %v", err)
 	}
 
 	// enrich / manipulate the message
@@ -71,14 +74,14 @@ func (s *Server) handleDelivery(d amqp.Delivery) {
 	body, _ := json.Marshal(enriched)
 
 	if err := rabbitmq.Publish(ctx, s.ch, "", rabbitmq.CompletedQueue, task.CorrelationID, body); err != nil {
-		log.Printf("publish completed-queue error: %v", err)
+		logx.Printf(ctx, "publish completed-queue error: %v", err)
 		_ = d.Nack(false, true) // requeue for another attempt
 		return
 	}
 
 	// message out
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", task.CorrelationID, "processing", "completed_published", enriched); err != nil {
-		log.Printf("completed_published log error: %v", err)
+		logx.Printf(ctx, "completed_published log error: %v", err)
 	}
 
 	_ = d.Ack(false)

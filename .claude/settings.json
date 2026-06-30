@@ -26,7 +26,11 @@
       "Bash(git config *)",
       "Bash(echo \"core.hooksPath = $\\(git config core.hooksPath\\)\")",
       "Bash(sh .githooks/pre-push)",
-      "Bash(go list *)"
+      "Bash(go list *)",
+      "mcp__datadog-mcp__list_datadog_skills",
+      "mcp__datadog-mcp__get_datadog_trace",
+      "Bash(sed -n '/func \\(s \\\\*Span\\) Format/,/^}/p' __TRACKED_VAR__/ddtrace/tracer/span.go)",
+      "Bash(curl -s -X POST http://localhost:8080/api/rabbitmq-call -H 'content-type: application/json' -d '{\"value\":42}')"
     ]
   }
 }
