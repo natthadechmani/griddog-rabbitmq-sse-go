@@ -1,0 +1,23 @@
+#!/bin/sh
+# Stamp DD_VERSION in .env with the current commit's short SHA before each push,
+# so Datadog APM / profiling / logs are tagged with exactly the pushed version.
+#
+# Enable once with:  git config core.hooksPath .githooks
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+ENV_FILE="$ROOT/.env"
+SHA="$(git rev-parse --short HEAD)"
+
+[ -f "$ENV_FILE" ] || touch "$ENV_FILE"
+
+if grep -q '^DD_VERSION=' "$ENV_FILE" 2>/dev/null; then
+  # Portable in-place edit (works on macOS/BSD and GNU sed).
+  tmp="$(mktemp)"
+  sed "s/^DD_VERSION=.*/DD_VERSION=${SHA}/" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+else
+  printf '\nDD_VERSION=%s\n' "$SHA" >> "$ENV_FILE"
+fi
+
+echo "pre-push: DD_VERSION=${SHA} written to .env (run 'docker compose up -d' to apply)"
+exit 0

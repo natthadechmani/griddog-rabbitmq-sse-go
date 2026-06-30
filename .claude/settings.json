@@ -16,7 +16,16 @@
       "Bash(curl -s 'http://localhost:8080/api/messages?flow=http')",
       "Bash(python3 -c 'import sys,json;print\\(len\\(json.load\\(sys.stdin\\)\\)\\)')",
       "Bash(curl -sN --max-time 3 http://localhost:8080/api/sse-call)",
-      "Bash(curl -sN --max-time 3 http://localhost:8088/api/sse-call)"
+      "Bash(curl -sN --max-time 3 http://localhost:8088/api/sse-call)",
+      "Bash(timeout 540 docker compose build gateway-backend)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(DD_API_KEY=0123456789abcdef0123456789abcdef docker compose up -d --build)",
+      "Bash(curl -s -X POST http://localhost:8080/api/rabbitmq-call -H 'content-type: application/json' -d '{\"value\":5}')",
+      "Bash(curl -s -X POST http://localhost:8080/api/http-call -H 'content-type: application/json' -d '{\"value\":5}')",
+      "Bash(chmod +x .githooks/pre-push)",
+      "Bash(git config *)",
+      "Bash(echo \"core.hooksPath = $\\(git config core.hooksPath\\)\")",
+      "Bash(sh .githooks/pre-push)"
     ]
   }
 }

@@ -8,7 +8,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG SERVICE=gateway
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/app ./cmd/${SERVICE}
+
+RUN go install github.com/DataDog/orchestrion@latest
+RUN orchestrion pin
+RUN CGO_ENABLED=0 GOOS=linux orchestrion go build -trimpath -o /out/app ./cmd/${SERVICE}
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates wget

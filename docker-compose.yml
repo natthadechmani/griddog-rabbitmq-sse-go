@@ -1,4 +1,27 @@
 services:
+  datadog-agent:
+    image: registry.datadoghq.com/agent:latest
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-datadoghq.com}
+      - DD_HOSTNAME=${DD_HOSTNAME:-griddog-sandbox}
+      - DD_TAGS=${DD_TAGS:-}
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - 'DD_CONTAINER_LABELS_AS_TAGS={"my.custom.label.team":"team"}'
+      - DD_APM_NON_LOCAL_TRAFFIC=true
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+    pid: "host"
+    ports:
+      - "8126:8126/tcp"
+      - "8125:8125/udp"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
   mysql:
     image: mysql:8
     environment:
@@ -37,6 +60,20 @@ services:
       MYSQL_DSN: "root:rootpw@tcp(mysql:3306)/appdb?parseTime=true&multiStatements=true"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       PROCESSING_BASE_URL: "http://processing-backend:8081"
+      # --- Datadog (orchestrion auto-instrumentation reports to the agent) ---
+      DD_AGENT_HOST: datadog-agent
+      DD_ENV: "${DD_ENV:-sandbox}"
+      DD_SERVICE: gateway-backend
+      DD_VERSION: "${DD_VERSION:-dev}"
+      DD_LOGS_INJECTION: "true"
+      DD_RUNTIME_METRICS_ENABLED: "true"
+      DD_PROFILING_ENABLED: "true"
+    labels:
+      my.custom.label.team: "golang-backend-team"
+      com.datadoghq.ad.logs: '[{"source": "go", "service": "gateway-backend"}]'
+      com.datadoghq.tags.service: "gateway-backend"
+      com.datadoghq.tags.env: "${DD_ENV:-sandbox}"
+      com.datadoghq.tags.version: "${DD_VERSION:-dev}"
     ports:
       - "8080:8080"
     depends_on:
@@ -44,6 +81,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      datadog-agent:
+        condition: service_started
 
   processing-backend:
     build:
@@ -55,6 +94,20 @@ services:
       PORT: "8081"
       MYSQL_DSN: "root:rootpw@tcp(mysql:3306)/appdb?parseTime=true&multiStatements=true"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      # --- Datadog (orchestrion auto-instrumentation reports to the agent) ---
+      DD_AGENT_HOST: datadog-agent
+      DD_ENV: "${DD_ENV:-sandbox}"
+      DD_SERVICE: processing-backend
+      DD_VERSION: "${DD_VERSION:-dev}"
+      DD_LOGS_INJECTION: "true"
+      DD_RUNTIME_METRICS_ENABLED: "true"
+      DD_PROFILING_ENABLED: "true"
+    labels:
+      my.custom.label.team: "golang-backend-team"
+      com.datadoghq.ad.logs: '[{"source": "go", "service": "processing-backend"}]'
+      com.datadoghq.tags.service: "processing-backend"
+      com.datadoghq.tags.env: "${DD_ENV:-sandbox}"
+      com.datadoghq.tags.version: "${DD_VERSION:-dev}"
     ports:
       - "8081:8081"
     depends_on:
@@ -62,6 +115,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      datadog-agent:
+        condition: service_started
 
   frontend:
     build:
