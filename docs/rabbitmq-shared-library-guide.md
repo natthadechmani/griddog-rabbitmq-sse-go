@@ -490,3 +490,84 @@ A consuming app confirms the library works exactly like the manual guide's **Ver
   — the in-repo version of the wrapper
   ([internal/rabbitmq/](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/tree/main/internal/rabbitmq):
   `rabbitmq.go`, `carrier.go`) that the two services already share locally.
+
+---
+
+## Appendix: one `dd-trace-go` across the app and the library
+
+Both your app **and** this library import `github.com/DataDog/dd-trace-go/v2`. That's a normal
+**diamond dependency** — and Go resolves it to a **single** version, linked **once**, so there is
+never a second copy of the tracer. (Unlike npm, Go cannot nest two versions of the same major module
+in one build.) Orchestrion is *not* a runtime dependency of the library — it's a build-time tool in
+your app — so the only shared runtime dep to reason about is `dd-trace-go/v2` itself.
+
+### How it resolves in practice (MVS)
+
+Go builds one flat module graph, collects every version requirement for a module path, and selects
+the **highest** one — Minimum Version Selection ("maximum of the required minimums"). Your app (the
+*main module*) decides the final version for the whole build; the library's `require` is only a floor.
+
+```
+                    your-app  (main module — its build decides the versions)
+                    /                              \
+     go-rabbitmq-messaging                   orchestrion (pinned in the app)
+     require dd-trace-go/v2 v2.9.1           require dd-trace-go/v2 v2.9.1
+                    \                              /
+                     ▼                            ▼
+             ┌────────────────────────────────────────────────┐
+             │ dd-trace-go/v2 — Go collects every requirement │
+             │ and links the HIGHEST version once  (MVS)      │
+             └────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+          ONE dd-trace-go/v2  →  ONE global tracer
+     (Orchestrion HTTP/SQL spans + the library's RabbitMQ spans share it)
+```
+
+```
+  requirement in the graph          selected for the build
+  ────────────────────────          ──────────────────────
+  your-app    → v2.10.0      ┐
+  commonlib   → v2.9.1       ├──▶    v2.10.0   (one version, compiled once)
+  another-dep → v2.8.0       ┘
+```
+
+One version → one package → **one process-wide tracer**, so all spans (app, Orchestrion, and this
+library) land on the same trace and DSM pathway. No duplication, no conflict.
+
+### The one real concern: major-version mismatch (v2 vs v3)
+
+Go uses *semantic import versioning*: a different **major** version is a different **module path**
+(`.../v2` vs `.../v3`), which Go treats as two separate modules — and those **can** coexist, giving
+you two tracers.
+
+```
+  SAFE — same major                       BROKEN — different majors
+  ─────────────────                       ─────────────────────────
+  app → dd-trace-go/v2  v2.10.0           app → dd-trace-go/v2   (imports .../v2/...)
+  lib → dd-trace-go/v2  v2.9.1            lib → dd-trace-go/v3   (imports .../v3/...)
+        │                                       │
+   MVS → ONE v2 module                    TWO modules linked in
+        │                                       │
+   ONE tracer ✅                          TWO tracers ❌
+   (spans + DSM unified)                  (spans split; DSM pathway breaks)
+```
+
+**Rule:** keep the library and the app on the **same major** of dd-trace-go (everything is `v2.x`
+today, so MVS just unifies them). Only act on a major bump (v2 → v3): upgrade the library and the app
+together, and keep Orchestrion's pinned dd-trace-go on the same major.
+
+### Managing it
+
+- **Library:** `require` a sensible floor (e.g. `dd-trace-go/v2 v2.9.1`); don't over-pin — any app
+  that needs newer bumps it via MVS.
+- **App:** `go get github.com/DataDog/dd-trace-go/v2@<version>`; MVS reconciles app + library +
+  Orchestrion to one version. Keep `orchestrion pin` on the same major.
+- **Inspect what got selected:**
+  ```bash
+  go list -m github.com/DataDog/dd-trace-go/v2      # the single selected version
+  go mod graph | grep dd-trace-go/v2                # who requires what
+  go mod why  -m github.com/DataDog/dd-trace-go/v2  # why it's in the build
+  ```
+- **Force a version if ever needed** (rare): `go get .../v2@vX.Y.Z` in the app, or a `replace`
+  directive as a last resort.
