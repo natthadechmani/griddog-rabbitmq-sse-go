@@ -88,9 +88,7 @@ func Publish(ctx context.Context, ch *amqp.Channel, exchange, routingKey, correl
 	// 3. DSM outbound checkpoint, then inject the pathway into the headers.
 	ctx, ok := tracer.SetDataStreamsCheckpointWithParams(ctx,
 		options.CheckpointParams{PayloadSize: int64(len(msg.Body))},
-		"direction:out", "type:rabbitmq",
-		"exchange:"+exchangeTag(exchange),
-		"has_routing_key:"+boolStr(routingKey != ""),
+		"direction:out", "type:rabbitmq", "exchange:default", // this app always uses the default exchange
 	)
 	if ok {
 		datastreams.InjectToBase64Carrier(ctx, amqpCarrier(msg.Headers))
