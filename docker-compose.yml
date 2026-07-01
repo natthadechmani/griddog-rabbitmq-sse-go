@@ -43,6 +43,14 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+      - "15692:15692" # Prometheus plugin /metrics
+    labels:
+      # Datadog Autodiscovery: run the rabbitmq integration against this container
+      # using the Prometheus plugin. %%host%% resolves to the container's IP; the
+      # detailed families add per-queue / per-exchange / per-node metrics that
+      # complement DSM. The agent picks these labels up via the docker socket.
+      com.datadoghq.ad.checks: '{"rabbitmq": {"init_config": {}, "instances": [{"prometheus_plugin": {"url": "http://%%host%%:15692", "unaggregated_endpoint": "detailed?family=queue_coarse_metrics&family=queue_consumer_count&family=channel_exchange_metrics&family=channel_queue_exchange_metrics&family=node_coarse_metrics"}}]}}'
+      com.datadoghq.ad.logs: '[{"source": "rabbitmq", "service": "rabbitmq", "log_processing_rules": [{"type": "multi_line", "name": "logs_starts_with_equal_sign", "pattern": "="}]}]'
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s

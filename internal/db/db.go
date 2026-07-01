@@ -75,9 +75,14 @@ func ListLogsByFlow(ctx context.Context, conn *sql.DB, flow string, limit int) (
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
+	// Take the most recent `limit` rows (so the latest run is always included,
+	// even after thousands of rows accumulate), then return them in chronological
+	// order for display.
 	rows, err := conn.QueryContext(ctx,
-		`SELECT id, flow, correlation_id, service, stage, payload, created_at
-		   FROM message_logs WHERE flow = ? ORDER BY id ASC LIMIT ?`, flow, limit)
+		`SELECT id, flow, correlation_id, service, stage, payload, created_at FROM (
+		     SELECT id, flow, correlation_id, service, stage, payload, created_at
+		       FROM message_logs WHERE flow = ? ORDER BY id DESC LIMIT ?
+		 ) recent ORDER BY id ASC`, flow, limit)
 	if err != nil {
 		return nil, err
 	}

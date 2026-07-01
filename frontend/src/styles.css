@@ -129,11 +129,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .msg-table th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .small { font-size: 11px; color: var(--muted); }
-.payload {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
-  color: #c8d3e8; display: inline-block; max-width: 320px; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
+/* Expandable payload cell: truncated preview that opens to full JSON on click. */
+.payload-cell summary {
+  cursor: pointer;
+  display: inline-block;
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #c8d3e8;
 }
+.payload-cell summary:hover { color: var(--gateway); }
+.payload-cell[open] summary { color: var(--processing); white-space: normal; max-width: none; }
+.payload-full {
+  margin: 6px 0 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; line-height: 1.5; color: #c8d3e8;
+  background: #0d121d; border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+  max-width: 640px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+
+/* DB viewer: stack Flow 2 and Flow 3 tables vertically (full width). */
+.db-stack { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 4px; }
 
 @media (max-width: 760px) {
   .cols { grid-template-columns: 1fr; }

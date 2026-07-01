@@ -27,7 +27,12 @@ function MessagesTable({ rows }) {
               <td><span className={`svc svc-${r.service}`}>{r.service}</span></td>
               <td>{r.stage}</td>
               <td className="mono small">{r.correlation_id.slice(0, 8)}…</td>
-              <td><code className="payload">{JSON.stringify(r.payload)}</code></td>
+              <td>
+                <details className="payload-cell">
+                  <summary>{JSON.stringify(r.payload)}</summary>
+                  <pre className="payload-full">{JSON.stringify(r.payload, null, 2)}</pre>
+                </details>
+              </td>
               <td className="mono small">{r.created_at}</td>
             </tr>
           ))}
@@ -212,7 +217,8 @@ export default function App() {
       {/* DB viewer */}
       <section className="card">
         <div className="card-head"><h2>Database · message_logs</h2></div>
-        <div className="cols">
+        <p className="muted small">Showing the most recent rows. Click any payload to expand the full value.</p>
+        <div className="db-stack">
           <div className="panel">
             <div className="panel-head">
               <strong>Flow 2 (rabbitmq)</strong>
