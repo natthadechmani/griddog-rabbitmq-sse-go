@@ -10,6 +10,17 @@ This is **not** a fork of `amqp091-go`. It **depends on** it and adds a thin ins
 layer on top (a wrapper / facade). Apps import only the wrapper; the OSS client and dd-trace-go
 become hidden, indirect dependencies.
 
+> **Reference implementation — see it end-to-end:**
+>
+> - 📦 Library: **[github.com/natthadechmani/go-rabbitmq-messaging](https://github.com/natthadechmani/go-rabbitmq-messaging)** (`v0.1.0`)
+> - 🔌 App that imports it: **[griddog-rabbitmq-sse-go @ `feature/import-common-lib`](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/tree/feature/import-common-lib)**
+> - 🔀 The exact before → after change: **[compare `main…feature/import-common-lib`](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/compare/main...feature/import-common-lib)**
+>
+> Verified end-to-end with `docker compose`: the RabbitMQ flow returns `200` with enrichment and
+> produces **one distributed trace** across both services (gateway `publish` → processing
+> `consume` → `publish` → gateway `consume`) plus a DSM pathway — with the services importing only
+> the library.
+
 ---
 
 ## Why a shared library?
@@ -54,10 +65,10 @@ A **normal Go module the org owns** that:
    app-1 · app-2 · … · app-N        each app imports ONLY the module
                    │
                    ▼
-   ┌───────────────────────────────────────────────┐
-   │ github.com/your-org/go-rabbitmq-messaging     │   the shared library (facade)
-   │ New · Publish(ctx, …) · Consume(ctx, handler) │   ← the only API apps call
-   └───────────────────────────────────────────────┘
+   ┌─────────────────────────────────────────────────┐
+   │ github.com/natthadechmani/go-rabbitmq-messaging │   the shared library (facade)
+   │ New · Publish(ctx, …) · Consume(ctx, handler)   │   ← the only API apps call
+   └─────────────────────────────────────────────────┘
                    │  wraps — indirect deps, hidden from apps
          ┌─────────┴──────────┐
          ▼                    ▼
@@ -67,11 +78,13 @@ A **normal Go module the org owns** that:
    └─────────────────┘   └─────────────────┘
 ```
 
-> This repo already demonstrates the pattern **locally**:
+> This repo demonstrated the pattern **locally** first —
 > [internal/rabbitmq/](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/tree/main/internal/rabbitmq)
-> is the single integration point, and the two services import it and **never import dd-trace-go
-> directly**. This guide is about promoting that package into a standalone, versioned module that
-> *other repositories* can `go get`.
+> on `main` is the single integration point, and the two services never import dd-trace-go directly.
+> It has now been **promoted** into the standalone module
+> [go-rabbitmq-messaging](https://github.com/natthadechmani/go-rabbitmq-messaging); the
+> [`feature/import-common-lib`](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/tree/feature/import-common-lib)
+> branch `go get`s that module and deletes the local copy.
 
 ---
 
@@ -108,7 +121,7 @@ The key deltas when the code becomes a library:
 ## The library API
 
 ```go
-package messaging // github.com/your-org/go-rabbitmq-messaging
+package messaging // github.com/natthadechmani/go-rabbitmq-messaging
 
 // --- configuration (functional options) ---
 type Option func(*config)
@@ -273,7 +286,7 @@ func (c *Client) handle(queue string, d amqp.Delivery, h Handler) {
 The app imports **only** the module. Producer and consumer are ~3 lines each:
 
 ```go
-import messaging "github.com/your-org/go-rabbitmq-messaging"
+import messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 client, _ := messaging.New(rabbitURL, messaging.WithService("orders-api"))
 defer client.Close()
@@ -287,22 +300,24 @@ _ = client.Consume(ctx, "orders.q", func(ctx context.Context, d messaging.Delive
 })
 ```
 
-Compare to the manual call sites —
-[internal/gateway/rabbitmq.go](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/blob/main/internal/gateway/rabbitmq.go)
-and [internal/processing/consumer.go](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/blob/main/internal/processing/consumer.go)
-— which additionally hand-manage `StartConsumeSpan`, `span.Finish()`, ack/nack, and thread `ctx`
-themselves.
+See the real before → after in this repo:
 
-> **Verified:** an example app calling exactly this API has **direct imports of only** `context`,
-> `log`, and the messaging module — `amqp091-go` and `dd-trace-go/v2` appear as `// indirect` in the
-> app's `go.mod`. The instrumentation truly is hidden.
+- **Manual** (`main`): [internal/processing/consumer.go](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/blob/main/internal/processing/consumer.go)
+  hand-manages `StartConsumeSpan`, `span.Finish()`, ack/nack, and threads `ctx` itself.
+- **Library** (`feature/import-common-lib`): [internal/processing/consumer.go](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/blob/feature/import-common-lib/internal/processing/consumer.go)
+  just supplies a `Handler` — the module does the rest.
+- **Full diff:** [main…feature/import-common-lib](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/compare/main...feature/import-common-lib).
+
+> **Verified end-to-end:** on `feature/import-common-lib` both services import **only** the module
+> (`amqp091-go` and `dd-trace-go/v2` are `// indirect` in `go.mod`), and `docker compose up --build`
+> runs the flow green — `200` + enrichment, one linked trace + DSM across both services.
 
 ---
 
 ## Module layout
 
 ```
-go-rabbitmq-messaging/            module github.com/your-org/go-rabbitmq-messaging
+go-rabbitmq-messaging/            module github.com/natthadechmani/go-rabbitmq-messaging
 ├── go.mod / go.sum               requires amqp091-go + dd-trace-go/v2 (indirect for apps)
 ├── client.go                     Client, New (retry), Close, DeclareQueues
 ├── publish.go                    Client.Publish            ← guide #2 + #4 producer
@@ -325,26 +340,30 @@ A Go library is a **versioned source module**, pulled with `go get` at build tim
 module the simplest path is a plain private git repo — Go resolves modules directly from git tags,
 so no separate package registry is required.
 
+> The reference library [go-rabbitmq-messaging](https://github.com/natthadechmani/go-rabbitmq-messaging)
+> is **public**, so `go get` (and the Docker build) need no auth. The steps below also cover the
+> **private** case.
+
 ### GitHub (private git + semver tag)
 
 **Publish** — a release *is* a tag (there is no separate publish step):
 
 ```bash
 # go.mod's module line must equal the repo path:
-#   module github.com/your-org/go-rabbitmq-messaging
+#   module github.com/natthadechmani/go-rabbitmq-messaging
 git tag v1.2.0
 git push origin v1.2.0
 ```
 
 For a **breaking change** (v2+), Go's semantic-import-versioning requires the major version as a
-path suffix: set `module github.com/your-org/go-rabbitmq-messaging/v2`, and consumers import
+path suffix: set `module github.com/natthadechmani/go-rabbitmq-messaging/v2`, and consumers import
 `.../v2/...`. `v0`/`v1` take no suffix.
 
 **Consume** the private repo:
 
 ```bash
-go env -w GOPRIVATE=github.com/your-org/*   # implies GONOPROXY + GONOSUMDB for these paths
-go get github.com/your-org/go-rabbitmq-messaging@v1.2.0
+go env -w GOPRIVATE=github.com/natthadechmani/*   # implies GONOPROXY + GONOSUMDB for these paths
+go get github.com/natthadechmani/go-rabbitmq-messaging@v1.2.0
 ```
 
 `GOPRIVATE` tells Go to fetch matching modules **direct from git** (not via the public proxy) and
@@ -376,7 +395,7 @@ platform team: fix a bug / add a tag
         │
         │ each service, on its own schedule:
         ▼
-  go get -u github.com/your-org/go-rabbitmq-messaging@v1.3.0
+  go get -u github.com/natthadechmani/go-rabbitmq-messaging@v1.3.0
         ├─► app-1  rebuild → new instrumentation, no code change
         ├─► app-2  rebuild → new instrumentation, no code change
         └─► app-N  rebuild → new instrumentation, no code change
@@ -411,6 +430,12 @@ version, and services adopt it with a one-line bump. No per-service rework.
 └──────────────────────────┘
 ONE trace + ONE DSM pathway across both apps — neither app wrote any instrumentation.
 ```
+
+**Proven in this repo:** the
+[`feature/import-common-lib`](https://github.com/natthadechmani/griddog-rabbitmq-sse-go/tree/feature/import-common-lib)
+branch produces exactly this shape — `POST /api/rabbitmq-call` → `publish(processing-queue)` →
+`consume(processing-queue)` → `publish(completed-queue)` → `consume(completed-queue)`, one trace
+across `gateway-backend` and `processing-backend`.
 
 ---
 
