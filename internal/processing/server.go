@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
-	amqp "github.com/rabbitmq/amqp091-go"
+	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 	"griddog/internal/config"
 	"griddog/internal/httpx"
@@ -14,12 +14,12 @@ import (
 type Server struct {
 	cfg config.Config
 	db  *sql.DB
-	ch  *amqp.Channel
+	mq  *messaging.Client // instrumented RabbitMQ client (shared library)
 }
 
 // NewServer builds a processing-backend server.
-func NewServer(cfg config.Config, database *sql.DB, ch *amqp.Channel) *Server {
-	return &Server{cfg: cfg, db: database, ch: ch}
+func NewServer(cfg config.Config, database *sql.DB, mq *messaging.Client) *Server {
+	return &Server{cfg: cfg, db: database, mq: mq}
 }
 
 // Routes returns the HTTP handler for the processing-backend.

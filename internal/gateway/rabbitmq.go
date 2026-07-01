@@ -9,14 +9,14 @@ import (
 	"sync"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/google/uuid"
+	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 	"griddog/internal/db"
 	"griddog/internal/httpx"
 	"griddog/internal/logx"
 	"griddog/internal/models"
-	"griddog/internal/rabbitmq"
+	"griddog/internal/queues"
 )
 
 // pendingRegistry correlates published requests with their completed-queue
@@ -57,40 +57,27 @@ func (p *pendingRegistry) cancel(id string) {
 	p.mu.Unlock()
 }
 
-// StartCompletedConsumer consumes completed-queue and routes each reply to the
-// waiting request handler by correlation id.
+// StartCompletedConsumer consumes completed-queue via the shared messaging client and
+// routes each reply to the waiting request handler by correlation id. The library creates
+// the APM consume span + inbound DSM checkpoint and hands us a ctx that already carries
+// both; this handler only resolves the waiter.
 func (s *Server) StartCompletedConsumer(ctx context.Context) error {
-	deliveries, err := rabbitmq.Consume(s.ch, rabbitmq.CompletedQueue)
-	if err != nil {
-		return err
-	}
 	go func() {
-		log.Printf("gateway-backend consuming %s", rabbitmq.CompletedQueue)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case d, ok := <-deliveries:
-				if !ok {
-					return
-				}
-				s.handleCompleted(d)
-			}
+		log.Printf("gateway-backend consuming %s", queues.Completed)
+		if err := s.mq.Consume(ctx, queues.Completed, s.handleCompleted); err != nil {
+			log.Printf("completed consumer stopped: %v", err)
 		}
 	}()
 	return nil
 }
 
-// handleCompleted routes a completed-queue reply to the waiting request handler,
-// wrapped in an APM consume span + inbound DSM checkpoint (terminal hop of the
-// flow-2 pathway, so the ctx isn't threaded onward).
-func (s *Server) handleCompleted(d amqp.Delivery) {
-	span, ctx := rabbitmq.StartConsumeSpan(d, rabbitmq.CompletedQueue)
-	defer span.Finish()
+// handleCompleted is the messaging.Handler for the completed-queue (terminal hop).
+// Returning nil Acks the delivery (the library owns ack/nack).
+func (s *Server) handleCompleted(ctx context.Context, d messaging.Delivery) error {
 	if !s.pending.deliver(d.CorrelationId, d.Body) {
 		logx.Printf(ctx, "no waiter for correlation_id=%s", d.CorrelationId)
 	}
-	_ = d.Ack(false)
+	return nil
 }
 
 // flowRequest is the body for both /rabbitmq-call and /http-call.
@@ -121,7 +108,8 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 	replyCh := s.pending.register(corrID)
 
 	body, _ := json.Marshal(task)
-	if err := rabbitmq.Publish(ctx, s.ch, "", rabbitmq.ProcessingQueue, corrID, body); err != nil {
+	// span + DSM checkpoint happen inside the library's Publish.
+	if err := s.mq.Publish(ctx, "", queues.Processing, corrID, body); err != nil {
 		s.pending.cancel(corrID)
 		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "publish failed"})
 		return

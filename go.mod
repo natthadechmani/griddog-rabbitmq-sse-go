@@ -6,7 +6,7 @@ require (
 	github.com/DataDog/dd-trace-go/v2 v2.9.1
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
-	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/natthadechmani/go-rabbitmq-messaging v0.1.0
 )
 
 require (
@@ -54,6 +54,7 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
+	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.10.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.2 // indirect
 	github.com/tinylib/msgp v1.6.3 // indirect

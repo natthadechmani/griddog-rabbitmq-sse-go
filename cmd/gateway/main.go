@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 
+	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
+
 	"griddog/internal/config"
 	"griddog/internal/db"
 	"griddog/internal/gateway"
-	"griddog/internal/rabbitmq"
+	"griddog/internal/queues"
 )
 
 func main() {
@@ -23,17 +25,17 @@ func main() {
 		log.Fatalf("schema: %v", err)
 	}
 
-	conn, ch, err := rabbitmq.Connect(cfg.RabbitMQURL)
+	// Instrumented RabbitMQ client from the shared library (APM + DSM baked in).
+	mq, err := messaging.New(cfg.RabbitMQURL, messaging.WithService("gateway-backend"))
 	if err != nil {
 		log.Fatalf("rabbitmq: %v", err)
 	}
-	defer conn.Close()
-	defer ch.Close()
-	if err := rabbitmq.DeclareQueues(ch, rabbitmq.ProcessingQueue, rabbitmq.CompletedQueue); err != nil {
+	defer mq.Close()
+	if err := mq.DeclareQueues(queues.Processing, queues.Completed); err != nil {
 		log.Fatalf("declare queues: %v", err)
 	}
 
-	srv := gateway.NewServer(cfg, database, ch)
+	srv := gateway.NewServer(cfg, database, mq)
 	if err := srv.StartCompletedConsumer(context.Background()); err != nil {
 		log.Fatalf("completed consumer: %v", err)
 	}
