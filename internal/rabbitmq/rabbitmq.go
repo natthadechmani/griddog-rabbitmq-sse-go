@@ -150,12 +150,13 @@ func boolStr(b bool) string {
 	return "false"
 }
 
-// logCarrierHeaders prints every header on an incoming delivery when
-// LOG_AMQP_HEADERS is set. This surfaces the propagated context that travels in
-// the message: the APM trace context (x-datadog-* and W3C traceparent/tracestate)
-// and the DSM pathway (dd-pathway-ctx-base64).
+// logCarrierHeaders prints every header on an incoming delivery. This surfaces
+// the propagated context that travels in the message: the APM trace context
+// (x-datadog-* and W3C traceparent/tracestate) and the DSM pathway
+// (dd-pathway-ctx-base64). Logging is on by default; set LOG_AMQP_HEADERS=false
+// to silence it.
 func logCarrierHeaders(ctx context.Context, queue string, headers amqp.Table) {
-	if os.Getenv("LOG_AMQP_HEADERS") == "" {
+	if os.Getenv("LOG_AMQP_HEADERS") == "true" {
 		return
 	}
 	// Raw Go-syntax dump of the full headers map (exactly:

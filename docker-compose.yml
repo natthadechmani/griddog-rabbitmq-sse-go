@@ -77,7 +77,6 @@ services:
       DD_RUNTIME_METRICS_ENABLED: "true"
       DD_PROFILING_ENABLED: "true"
       DD_DATA_STREAMS_ENABLED: "true"
-      LOG_AMQP_HEADERS: "true"
     labels:
       my.custom.label.team: "golang-backend-team"
       com.datadoghq.ad.logs: '[{"source": "go", "service": "gateway-backend"}]'
@@ -113,7 +112,6 @@ services:
       DD_RUNTIME_METRICS_ENABLED: "true"
       DD_PROFILING_ENABLED: "true"
       DD_DATA_STREAMS_ENABLED: "true"
-      LOG_AMQP_HEADERS: "true"
     labels:
       my.custom.label.team: "golang-backend-team"
       com.datadoghq.ad.logs: '[{"source": "go", "service": "processing-backend"}]'
