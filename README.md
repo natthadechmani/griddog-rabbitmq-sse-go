@@ -50,6 +50,52 @@ npm run dev        # http://localhost:5173  (proxies /api → localhost:8080)
 The frontend always uses relative `/api` paths, so it works identically whether served by nginx
 (Docker) or proxied by Vite (local dev).
 
+### Option C — local Kubernetes with minikube
+
+For the short path, build local images, load them into minikube, install Datadog, then apply
+the app manifests:
+
+```bash
+minikube start --driver=docker --container-runtime=containerd --cpus=4 --memory=8192
+
+docker build -t griddog/gateway:dev    -f deploy/Dockerfile --build-arg SERVICE=gateway .
+docker build -t griddog/processing:dev -f deploy/Dockerfile --build-arg SERVICE=processing .
+docker build -t griddog/frontend:dev   -f deploy/frontend/Dockerfile .
+
+minikube image load griddog/gateway:dev
+minikube image load griddog/processing:dev
+minikube image load griddog/frontend:dev
+
+# Datadog Operator + Agent (requires DD_API_KEY in .env)
+helm repo add datadog https://helm.datadoghq.com
+helm repo update
+kubectl create namespace datadog
+helm install datadog-operator datadog/datadog-operator -n datadog
+kubectl create secret generic datadog-secret -n datadog \
+  --from-literal api-key="$(grep '^DD_API_KEY=' .env | cut -d= -f2)"
+kubectl apply -f k8s/datadog-agent.yaml
+kubectl -n datadog get pods -w
+```
+
+When the Datadog pods are Running, apply the app:
+
+```bash
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/mysql.yaml -f k8s/rabbitmq.yaml
+kubectl apply -f k8s/processing-backend.yaml -f k8s/gateway-backend.yaml -f k8s/frontend.yaml
+kubectl -n griddog get pods -w
+```
+
+Open it from your host with port-forwarding, in separate terminals:
+
+```bash
+kubectl -n griddog port-forward svc/frontend 18088:80
+kubectl -n griddog port-forward svc/gateway-backend 18080:8080
+```
+
+Then use http://localhost:18088 for the UI and http://localhost:18080/api/health for the API.
+For more details and cleanup commands, see [`k8s/README.md`](k8s/README.md).
+
 ### Running the Go services directly (no Docker for the apps)
 
 With `mysql` and `rabbitmq` up (e.g. `docker compose up mysql rabbitmq`):
