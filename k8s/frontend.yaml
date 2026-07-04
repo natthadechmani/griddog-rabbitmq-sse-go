@@ -1,7 +1,3 @@
-# nginx works unchanged from the compose setup — its proxy_pass targets the
-# gateway-backend Service by name. Only the logs annotation is Datadog-specific.
-# NodePort so it's reachable via `minikube service` / port-forward (the node
-# IP is not routable from the host on the macOS docker/containerd driver).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +10,7 @@ spec:
     metadata:
       labels: { app: frontend }
       annotations:
-        ad.datadoghq.com/web.logs: '[{"source":"nginx","service":"frontend"}]'   # 👉 DATADOG nginx logs
+        ad.datadoghq.com/web.logs: '[{"source":"nginx","service":"frontend"}]'   #  Nginx logs Autodiscovery/Parser
     spec:
       containers:
         - name: web                    # <-- matches ad.datadoghq.com/web.logs

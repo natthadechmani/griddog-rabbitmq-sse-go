@@ -1,7 +1,4 @@
-# The Datadog integration here is entirely the two pod-template annotations
-# below (ad.datadoghq.com/<container>.{checks,logs}) — everything else is
-# vanilla Kubernetes. <container> must match the container `name:` in the
-# pod spec, which is `rabbitmq` here. %%host%% resolves to the pod IP.
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +11,7 @@ spec:
     metadata:
       labels: { app: rabbitmq }
       annotations:
-        # 👉 DATADOG — RabbitMQ integration (Prometheus plugin) + log collection:
+        # DATADOG — RabbitMQ integration (Prometheus plugin) + log collection:
         ad.datadoghq.com/rabbitmq.checks: |
           {"rabbitmq":{"init_config":{},"instances":[{"prometheus_plugin":{"url":"http://%%host%%:15692","unaggregated_endpoint":"detailed?family=queue_coarse_metrics&family=queue_consumer_count&family=channel_exchange_metrics&family=channel_queue_exchange_metrics&family=node_coarse_metrics"}}]}}
         ad.datadoghq.com/rabbitmq.logs: |

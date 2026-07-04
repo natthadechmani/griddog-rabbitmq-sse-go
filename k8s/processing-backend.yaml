@@ -1,5 +1,3 @@
-# Identical pattern to gateway-backend.yaml (same 👉 Datadog lines) with:
-# name/service = processing-backend, port 8081, no PROCESSING_BASE_URL.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,8 +5,7 @@ metadata:
   namespace: griddog
   labels:
     app: processing-backend
-    # 👉 DATADOG unified service tagging on the workload too (Datadog "full
-    # configuration" — mirror of the pod labels below):
+    # DATADOG Unified Service Tagging
     tags.datadoghq.com/env: "k8s-sandbox"
     tags.datadoghq.com/service: "processing-backend"
     tags.datadoghq.com/version: "dev"
@@ -18,17 +15,15 @@ spec:
     metadata:
       labels:
         app: processing-backend
-        # 👉 DATADOG unified service tagging — the Admission Controller reads
-        # these to inject DD_ENV/DD_SERVICE/DD_VERSION into the container:
+        # DATADOG Unified Service Tagging
+        # Inject DD_ENV/DD_SERVICE/DD_VERSION into the container:
         tags.datadoghq.com/env: "k8s-sandbox"
         tags.datadoghq.com/service: "processing-backend"
         tags.datadoghq.com/version: "dev"
-        # 👉 DATADOG — opt this pod into Admission Controller injection
-        # (trace/dogstatsd socket + volume + env vars):
         admission.datadoghq.com/enabled: "true"
-        my.custom.label.team: "golang-backend-team"   # -> "team" tag via podLabelsAsTags
+        my.custom.label.team: "golang-backend-team"
       annotations:
-        # 👉 DATADOG — collect this container's logs as Go logs, tagged to the service:
+        # Enable Log Collection AutoDiscovery + Parsing
         ad.datadoghq.com/app.logs: '[{"source":"go","service":"processing-backend"}]'
     spec:
       containers:
@@ -41,8 +36,7 @@ spec:
             - { name: PORT, value: "8081" }
             - { name: MYSQL_DSN, value: "root:rootpw@tcp(mysql:3306)/appdb?parseTime=true&multiStatements=true" }
             - { name: RABBITMQ_URL, value: "amqp://guest:guest@rabbitmq:5672/" }
-            # 👉 DATADOG feature flags — DD_AGENT_HOST/DD_ENV/DD_SERVICE/DD_VERSION
-            # + socket are Admission-Controller-injected, not set here:
+            # DATADOG Feature Flags
             - { name: DD_LOGS_INJECTION, value: "true" }
             - { name: DD_RUNTIME_METRICS_ENABLED, value: "true" }
             - { name: DD_PROFILING_ENABLED, value: "true" }

@@ -1,7 +1,3 @@
-# Plain infra — no Datadog-specific config here.
-# Lean on purpose: no init.sql ConfigMap (the app creates its schema via
-# CREATE TABLE IF NOT EXISTS) and storage is ephemeral. For persistence, add
-# a PersistentVolumeClaim + a /var/lib/mysql volumeMount.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
