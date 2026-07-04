@@ -24,8 +24,16 @@ const (
 	CompletedQueue  = "completed-queue"  // processing -> gateway
 )
 
+// brokerHost identifies the RabbitMQ broker, captured once at Connect from the AMQP
+// URL. It tags producer spans as out.host so Datadog resolves peer.service and draws
+// the broker on the service map — the RabbitMQ analog of Kafka's bootstrap.servers.
+var brokerHost string
+
 // Connect dials RabbitMQ and opens a channel, retrying until reachable.
 func Connect(url string) (*amqp.Connection, *amqp.Channel, error) {
+	if uri, err := amqp.ParseURI(url); err == nil {
+		brokerHost = uri.Host
+	}
 	var lastErr error
 	for attempt := 1; attempt <= 30; attempt++ {
 		conn, err := amqp.Dial(url)
@@ -62,7 +70,7 @@ func DeclareQueues(ch *amqp.Channel, names ...string) error {
 //
 // This app uses the default exchange (exchange == ""), so routingKey is the
 // destination queue name.
-func Publish(ctx context.Context, ch *amqp.Channel, exchange, routingKey, correlationID string, body []byte) error {
+func Publish(ctx context.Context, ch *amqp.Channel, exchange, routingKey, correlationID string, body []byte) (err error) {
 	msg := amqp.Publishing{
 		Headers:       amqp.Table{}, // non-nil so we can inject headers
 		ContentType:   "application/json",
@@ -72,34 +80,45 @@ func Publish(ctx context.Context, ch *amqp.Channel, exchange, routingKey, correl
 		Timestamp:     time.Now(),
 	}
 
-	// 1. APM producer span (child of whatever is in ctx).
+	// 1. APM producer span (child of whatever is in ctx). Tags follow the amqp.*
+	//    convention that Datadog's Java/Node auto-instrumentation emits.
 	span, ctx := tracer.StartSpanFromContext(ctx, "rabbitmq.publish",
 		tracer.ResourceName("publish "+routingKey),
 		tracer.SpanType(ext.SpanTypeMessageProducer),
+		tracer.Tag(ext.SpanKind, ext.SpanKindProducer),
+		tracer.Tag(ext.Component, "rabbitmq"),
 		tracer.Tag(ext.MessagingSystem, "rabbitmq"),
-		tracer.Tag("messaging.destination", routingKey),
+		tracer.Tag(ext.MessagingDestinationName, routingKey),
+		// out.host -> peer.service, so the broker shows on the service map.
+		tracer.Tag(ext.TargetHost, brokerHost),
+		tracer.Tag("amqp.exchange", exchangeTag(exchange)),
+		tracer.Tag("amqp.routing_key", routingKey),
+		tracer.Tag("amqp.command", "basic.publish"),
+		tracer.Tag("amqp.delivery_mode", int(msg.DeliveryMode)),
+		tracer.Tag("message.size", len(body)),
 		tracer.Tag("messaging.message_id", correlationID),
 	)
-	defer span.Finish()
+	// The deferred Finish records err (the named return) on the span when non-nil.
+	defer func() { span.Finish(tracer.WithError(err)) }()
 
 	// 2. Inject the APM trace context into the headers.
 	_ = tracer.Inject(span.Context(), amqpCarrier(msg.Headers))
 
-	// 3. DSM outbound checkpoint, then inject the pathway into the headers.
+	// 3. DSM outbound checkpoint, then inject the pathway into the headers. This app
+	//    publishes to the default exchange, so the routing key is the destination
+	//    queue: tag it topic:<queue> so produce and consume share one DSM edge (the
+	//    convention dd-trace-js amqplib uses for the default exchange).
 	ctx, ok := tracer.SetDataStreamsCheckpointWithParams(ctx,
-		options.CheckpointParams{PayloadSize: int64(len(msg.Body))},
-		"direction:out", "type:rabbitmq", "exchange:default", // this app always uses the default exchange
+		options.CheckpointParams{PayloadSize: amqpMessageSize(msg.Headers, msg.Body)},
+		"direction:out", "type:rabbitmq", "topic:"+routingKey,
 	)
 	if ok {
 		datastreams.InjectToBase64Carrier(ctx, amqpCarrier(msg.Headers))
 	}
 
-	// 4. Publish, recording any error on the span.
-	if err := ch.PublishWithContext(ctx, exchange, routingKey, false, false, msg); err != nil {
-		span.SetTag(ext.Error, err)
-		return err
-	}
-	return nil
+	// 4. Publish; the deferred Finish records any error on the span.
+	err = ch.PublishWithContext(ctx, exchange, routingKey, false, false, msg)
+	return err
 }
 
 // Consume registers a consumer on a queue with manual acknowledgement.
@@ -111,6 +130,10 @@ func Consume(ch *amqp.Channel, queue string) (<-chan amqp.Delivery, error) {
 // an inbound DSM checkpoint for a delivery. The caller MUST Finish the returned
 // span. The returned ctx carries BOTH the active span and the DSM pathway: pass
 // it to a downstream Publish to continue the trace and the pathway in one go.
+//
+// Like dd-trace-go's Kafka integration, the consume span records no processing
+// error — it is finished with a plain span.Finish(); the handler owns Ack/Nack and
+// deals with its own failures. Only the producer records errors (see Publish).
 func StartConsumeSpan(d amqp.Delivery, queue string) (*tracer.Span, context.Context) {
 	// 1. Extract the upstream APM trace context so this consume is a child span.
 	parent, _ := tracer.Extract(amqpCarrier(d.Headers))
@@ -118,8 +141,16 @@ func StartConsumeSpan(d amqp.Delivery, queue string) (*tracer.Span, context.Cont
 		tracer.ChildOf(parent),
 		tracer.ResourceName("consume "+queue),
 		tracer.SpanType(ext.SpanTypeMessageConsumer),
+		tracer.Tag(ext.SpanKind, ext.SpanKindConsumer),
+		tracer.Tag(ext.Component, "rabbitmq"),
 		tracer.Tag(ext.MessagingSystem, "rabbitmq"),
-		tracer.Tag("messaging.destination", queue),
+		tracer.Tag(ext.MessagingDestinationName, queue),
+		tracer.Tag("amqp.queue", queue),
+		tracer.Tag("amqp.exchange", exchangeTag(d.Exchange)),
+		tracer.Tag("amqp.routing_key", d.RoutingKey),
+		tracer.Tag("amqp.command", "basic.deliver"),
+		tracer.Tag("message.size", len(d.Body)),
+		tracer.Measured(),
 	)
 	ctx := tracer.ContextWithSpan(context.Background(), span)
 
@@ -130,7 +161,7 @@ func StartConsumeSpan(d amqp.Delivery, queue string) (*tracer.Span, context.Cont
 	//    checkpoint, threaded onto the span's ctx.
 	ctx, _ = tracer.SetDataStreamsCheckpointWithParams(
 		datastreams.ExtractFromBase64Carrier(ctx, amqpCarrier(d.Headers)),
-		options.CheckpointParams{PayloadSize: int64(len(d.Body))},
+		options.CheckpointParams{PayloadSize: amqpMessageSize(d.Headers, d.Body)},
 		"direction:in", "type:rabbitmq", "topic:"+queue,
 	)
 	return span, ctx
@@ -143,11 +174,18 @@ func exchangeTag(exchange string) string {
 	return exchange
 }
 
-func boolStr(b bool) string {
-	if b {
-		return "true"
+// amqpMessageSize approximates the DSM payload size like dd-trace-go's Kafka
+// getMsgSize and dd-trace-js's getAmqpMessageSize: the body plus each header's
+// key/value bytes (the trace-context and pathway headers are strings).
+func amqpMessageSize(headers amqp.Table, body []byte) int64 {
+	size := int64(len(body))
+	for k, v := range headers {
+		size += int64(len(k))
+		if s, ok := v.(string); ok {
+			size += int64(len(s))
+		}
 	}
-	return "false"
+	return size
 }
 
 // logCarrierHeaders prints every header on an incoming delivery. This surfaces
@@ -156,7 +194,7 @@ func boolStr(b bool) string {
 // (dd-pathway-ctx-base64). Logging is on by default; set LOG_AMQP_HEADERS=false
 // to silence it.
 func logCarrierHeaders(ctx context.Context, queue string, headers amqp.Table) {
-	if os.Getenv("LOG_AMQP_HEADERS") == "true" {
+	if os.Getenv("LOG_AMQP_HEADERS") == "false" {
 		return
 	}
 	// Raw Go-syntax dump of the full headers map (exactly:
