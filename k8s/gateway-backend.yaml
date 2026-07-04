@@ -1,0 +1,59 @@
+# Generic APM-ready backend template. Everything not marked 👉 is ordinary
+# Kubernetes. The 👉 lines are all it takes to get APM traces, DSM,
+# profiling, and trace-correlated logs for a service via the Datadog
+# Admission Controller (no DD_AGENT_HOST / socket volume by hand).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-backend
+  namespace: griddog
+  labels:
+    app: gateway-backend
+    # 👉 DATADOG unified service tagging on the workload too (Datadog "full
+    # configuration" — mirror of the pod labels below):
+    tags.datadoghq.com/env: "k8s-sandbox"
+    tags.datadoghq.com/service: "gateway-backend"
+    tags.datadoghq.com/version: "dev"
+spec:
+  selector: { matchLabels: { app: gateway-backend } }
+  template:
+    metadata:
+      labels:
+        app: gateway-backend
+        # 👉 DATADOG unified service tagging — the Admission Controller reads
+        # these to inject DD_ENV/DD_SERVICE/DD_VERSION into the container:
+        tags.datadoghq.com/env: "k8s-sandbox"
+        tags.datadoghq.com/service: "gateway-backend"
+        tags.datadoghq.com/version: "dev"
+        # 👉 DATADOG — opt this pod into Admission Controller injection
+        # (trace/dogstatsd socket + volume + env vars):
+        admission.datadoghq.com/enabled: "true"
+        my.custom.label.team: "golang-backend-team"   # -> "team" tag via podLabelsAsTags
+      annotations:
+        # 👉 DATADOG — collect this container's logs as Go logs, tagged to the service:
+        ad.datadoghq.com/app.logs: '[{"source":"go","service":"gateway-backend"}]'
+    spec:
+      containers:
+        - name: app                    # <-- matches ad.datadoghq.com/app.logs
+          image: griddog/gateway:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            # --- app connectivity (in-cluster Service DNS) ---
+            - { name: PORT, value: "8080" }
+            - { name: MYSQL_DSN, value: "root:rootpw@tcp(mysql:3306)/appdb?parseTime=true&multiStatements=true" }
+            - { name: RABBITMQ_URL, value: "amqp://guest:guest@rabbitmq:5672/" }
+            - { name: PROCESSING_BASE_URL, value: "http://processing-backend:8081" }   # gateway ONLY
+            # 👉 DATADOG feature flags — DD_AGENT_HOST/DD_ENV/DD_SERVICE/DD_VERSION
+            # + socket are Admission-Controller-injected, not set here:
+            - { name: DD_LOGS_INJECTION, value: "true" }
+            - { name: DD_RUNTIME_METRICS_ENABLED, value: "true" }
+            - { name: DD_PROFILING_ENABLED, value: "true" }
+            - { name: DD_DATA_STREAMS_ENABLED, value: "true" }   # DSM
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gateway-backend, namespace: griddog }   # name MUST match — nginx + flows target it
+spec:
+  selector: { app: gateway-backend }
+  ports: [{ port: 8080 }]

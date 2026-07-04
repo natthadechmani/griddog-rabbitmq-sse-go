@@ -1,0 +1,51 @@
+# DatadogAgent CR — the operator itself is installed via Helm (see README/plan
+# for the exact commands). Applying this CR deploys the node-agent DaemonSet
+# + cluster-agent (which runs the Admission Controller webhook).
+apiVersion: datadoghq.com/v2alpha1
+kind: DatadogAgent
+metadata:
+  name: datadog
+  namespace: datadog
+spec:
+  global:
+    clusterName: griddog-k8s-sandbox
+    site: datadoghq.com
+    credentials:
+      apiSecret:
+        secretName: datadog-secret
+        keyName: api-key
+    podLabelsAsTags:                 # compose DD_CONTAINER_LABELS_AS_TAGS analog
+      my.custom.label.team: team
+    tags:                            # 👉 stamp ALL telemetry from this cluster
+      - "env:k8s-sandbox"            #    (isolates from the compose env:sandbox data)
+    kubelet:
+      # minikube's kubelet serves a self-signed cert the Agent won't trust by
+      # default, which breaks kubelet-based Autodiscovery (log/AD annotations,
+      # pod metadata) with "impossible to reach Kubelet ... temporary failure
+      # in kubeutil". Disable verification for this local sandbox only.
+      tlsVerify: false
+  features:
+    apm:
+      enabled: true                  # UDS default (/var/run/datadog/apm.socket) — no hostPort needed
+      unixDomainSocketConfig:
+        enabled: true
+        path: /var/run/datadog/apm.socket
+    admissionController:             # on by default; explicit for clarity
+      enabled: true
+      mutateUnlabelled: false        # only pods labeled admission.datadoghq.com/enabled="true" are injected
+    logCollection:                   # OFF by default — must enable
+      enabled: true
+      containerCollectAll: true
+    liveProcessCollection:           # OFF by default — must enable
+      enabled: true
+  override:
+    nodeAgent:
+      # minikube has no cloud-metadata hostname source, so the Agent's normal
+      # hostname auto-detection (GCE/EC2/Azure/kubelet nodename) can fail
+      # with "unable to reliably determine the host name" — pin it explicitly
+      # to the K8s node name via the downward API.
+      env:
+        - name: DD_HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
