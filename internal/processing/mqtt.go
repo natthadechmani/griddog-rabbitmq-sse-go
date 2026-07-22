@@ -6,7 +6,8 @@ import (
 	"log"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 
 	"griddog/internal/db"
 	"griddog/internal/emqx"
@@ -15,29 +16,31 @@ import (
 )
 
 // OnMQTTConnect (re)establishes the processing subscription to the requests topic.
-// Wired as the EMQX OnConnectHandler, it runs on every (re)connection and receives
-// the client from paho.
-func (s *Server) OnMQTTConnect(c mqtt.Client) {
-	tok := c.Subscribe(emqx.RequestTopic, emqx.QoS, s.handleMQTTRequest)
-	if tok.Wait() && tok.Error() != nil {
-		log.Printf("processing subscribe %s failed: %v", emqx.RequestTopic, tok.Error())
+// Wired as autopaho's OnConnectionUp, it runs on every (re)connection and receives the
+// live ConnectionManager.
+func (s *Server) OnMQTTConnect(cm *autopaho.ConnectionManager) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := cm.Subscribe(ctx, &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{{Topic: emqx.RequestTopic, QoS: emqx.QoS}},
+	}); err != nil {
+		log.Printf("processing subscribe %s failed: %v", emqx.RequestTopic, err)
 		return
 	}
 	log.Printf("processing-backend subscribed to %s", emqx.RequestTopic)
 }
 
-// handleMQTTRequest runs on paho's router goroutine, so it must return quickly. It
-// copies the payload (paho recycles the buffer after the callback returns) and hands
-// the work to a goroutine — processMQTT does a DB write AND a publish+Wait, which
-// would block/deadlock the single router goroutine if run inline.
-func (s *Server) handleMQTTRequest(_ mqtt.Client, m mqtt.Message) {
-	payload := append([]byte(nil), m.Payload()...)
-	go s.processMQTT(payload)
+// handleMQTTRequest runs on autopaho's inbound router, so it must return quickly. It
+// copies the payload and hands the work to a goroutine — processMQTT does a DB write
+// AND a publish, which shouldn't run on the router goroutine.
+func (s *Server) handleMQTTRequest(_ string, payload []byte) {
+	p := append([]byte(nil), payload...)
+	go s.processMQTT(p)
 }
 
 // processMQTT enriches a task and republishes it to the completed topic — the MQTT
-// analog of handleDelivery, minus the tracing. There is no ambient span here (paho
-// is not auto-instrumented), so the InsertLog calls below are standalone MySQL
+// analog of handleDelivery, minus the tracing. There is no ambient span here (the MQTT
+// client is not auto-instrumented), so the InsertLog calls below are standalone MySQL
 // traces; that is expected for this phase.
 func (s *Server) processMQTT(payload []byte) {
 	ctx := context.Background()
@@ -66,7 +69,7 @@ func (s *Server) processMQTT(payload []byte) {
 	}
 	body, _ := json.Marshal(enriched)
 
-	if err := emqx.Publish(s.mqtt, emqx.CompletedTopic, body); err != nil {
+	if err := emqx.Publish(ctx, s.mqtt, emqx.CompletedTopic, body); err != nil {
 		logx.Printf(ctx, "publish completed topic error corr=%s: %v", task.CorrelationID, err)
 		return
 	}

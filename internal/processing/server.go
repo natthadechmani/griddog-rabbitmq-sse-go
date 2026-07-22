@@ -4,10 +4,11 @@ import (
 	"database/sql"
 	"net/http"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"griddog/internal/config"
+	"griddog/internal/emqx"
 	"griddog/internal/httpx"
 )
 
@@ -16,7 +17,7 @@ type Server struct {
 	cfg  config.Config
 	db   *sql.DB
 	ch   *amqp.Channel
-	mqtt mqtt.Client // flow 4: EMQX publish path (armed via SetMQTT after Connect)
+	mqtt *autopaho.ConnectionManager // flow 4: EMQX publish path (armed via SetMQTT after Connect)
 }
 
 // NewServer builds a processing-backend server. The MQTT client is attached later
@@ -26,8 +27,17 @@ func NewServer(cfg config.Config, database *sql.DB, ch *amqp.Channel) *Server {
 	return &Server{cfg: cfg, db: database, ch: ch}
 }
 
-// SetMQTT attaches the connected EMQX client so processing can publish replies.
-func (s *Server) SetMQTT(client mqtt.Client) { s.mqtt = client }
+// SetMQTT attaches the connected EMQX connection manager so processing can publish replies.
+func (s *Server) SetMQTT(cm *autopaho.ConnectionManager) { s.mqtt = cm }
+
+// MQTTHandlers bundles the callbacks autopaho needs at construction time: the
+// resubscribe hook (OnConnectionUp) and the single inbound-message router (OnMessage).
+func (s *Server) MQTTHandlers() emqx.Handlers {
+	return emqx.Handlers{
+		OnConnectionUp: s.OnMQTTConnect,
+		OnMessage:      s.handleMQTTRequest,
+	}
+}
 
 // Routes returns the HTTP handler for the processing-backend.
 func (s *Server) Routes() http.Handler {

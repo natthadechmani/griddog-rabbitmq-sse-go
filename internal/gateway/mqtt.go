@@ -1,13 +1,15 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"math/rand"
 	"net/http"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/google/uuid"
 
 	"griddog/internal/db"
@@ -17,31 +19,33 @@ import (
 	"griddog/internal/models"
 )
 
-// OnMQTTConnect (re)establishes the gateway's subscription to the completed topic.
-// It is wired as the EMQX OnConnectHandler, so it runs on every (re)connection and
-// receives the client from paho — safe to use before SetMQTT has stored the client.
-func (s *Server) OnMQTTConnect(c mqtt.Client) {
-	tok := c.Subscribe(emqx.CompletedTopic, emqx.QoS, s.handleMQTTCompleted)
-	if tok.Wait() && tok.Error() != nil {
-		log.Printf("gateway subscribe %s failed: %v", emqx.CompletedTopic, tok.Error())
+// OnMQTTConnect (re)establishes the gateway's subscription to the completed topic. It
+// is wired as autopaho's OnConnectionUp, so it runs on every (re)connection and
+// receives the live ConnectionManager — safe to use before SetMQTT has stored it.
+func (s *Server) OnMQTTConnect(cm *autopaho.ConnectionManager) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := cm.Subscribe(ctx, &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{{Topic: emqx.CompletedTopic, QoS: emqx.QoS}},
+	}); err != nil {
+		log.Printf("gateway subscribe %s failed: %v", emqx.CompletedTopic, err)
 		return
 	}
 	log.Printf("gateway-backend subscribed to %s", emqx.CompletedTopic)
 }
 
-// handleMQTTCompleted routes a completed-topic reply to the waiting request handler
-// by correlation id, which (unlike AMQP's CorrelationId property) is read from the
-// JSON payload. This runs directly on paho's router goroutine: it is O(1) and never
-// blocks (deliver sends on a cap-1 buffered channel), so no goroutine dispatch.
-func (s *Server) handleMQTTCompleted(_ mqtt.Client, m mqtt.Message) {
+// handleMQTTCompleted routes a completed-topic reply to the waiting request handler by
+// correlation id, which (unlike AMQP's CorrelationId property) is read from the JSON
+// payload. It runs on autopaho's inbound router; it is O(1) and never blocks (deliver
+// sends on a cap-1 buffered channel), so no goroutine dispatch.
+func (s *Server) handleMQTTCompleted(topic string, payload []byte) {
 	var enriched models.EnrichedTask
-	if err := json.Unmarshal(m.Payload(), &enriched); err != nil || enriched.CorrelationID == "" {
-		log.Printf("mqtt completed: bad/empty payload on %s: %v", m.Topic(), err)
+	if err := json.Unmarshal(payload, &enriched); err != nil || enriched.CorrelationID == "" {
+		log.Printf("mqtt completed: bad/empty payload on %s: %v", topic, err)
 		return
 	}
-	// Copy the payload: paho may recycle the backing slice once this callback returns,
-	// and we hand it to the HTTP handler goroutine via the reply channel.
-	if !s.mqttPending.deliver(enriched.CorrelationID, append([]byte(nil), m.Payload()...)) {
+	// Copy the payload before handing it to the HTTP handler goroutine via the channel.
+	if !s.mqttPending.deliver(enriched.CorrelationID, append([]byte(nil), payload...)) {
 		log.Printf("mqtt completed: no waiter for correlation_id=%s", enriched.CorrelationID)
 	}
 }
@@ -73,7 +77,7 @@ func (s *Server) handleMQTTCall(w http.ResponseWriter, r *http.Request) {
 	replyCh := s.mqttPending.register(corrID)
 
 	body, _ := json.Marshal(task)
-	if err := emqx.Publish(s.mqtt, emqx.RequestTopic, body); err != nil {
+	if err := emqx.Publish(ctx, s.mqtt, emqx.RequestTopic, body); err != nil {
 		s.mqttPending.cancel(corrID)
 		logx.Printf(ctx, "mqtt publish error: %v", err)
 		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "publish failed"})

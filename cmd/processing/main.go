@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"griddog/internal/config"
 	"griddog/internal/db"
@@ -39,14 +40,19 @@ func main() {
 		log.Fatalf("consumer: %v", err)
 	}
 
-	// Flow 4 (MQTT/EMQX). Connect passing srv.OnMQTTConnect so the requests-topic
-	// subscription is (re)established on every connection; then arm the publish path.
-	mqttClient, err := emqx.Connect(cfg.MQTTBrokerURL, "griddog-processing", srv.OnMQTTConnect)
+	// Flow 4 (MQTT 5.0/EMQX via autopaho). MQTTHandlers carries the resubscribe callback
+	// and the inbound router, both of which autopaho needs at construction time; then
+	// arm the publish path.
+	mqttCM, err := emqx.Connect(context.Background(), cfg.MQTTBrokerURL, "griddog-processing", srv.MQTTHandlers())
 	if err != nil {
 		log.Fatalf("emqx: %v", err)
 	}
-	defer mqttClient.Disconnect(250)
-	srv.SetMQTT(mqttClient)
+	defer func() {
+		dctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = mqttCM.Disconnect(dctx)
+	}()
+	srv.SetMQTT(mqttCM)
 
 	addr := ":" + cfg.Port
 	log.Printf("processing-backend listening on %s", addr)
