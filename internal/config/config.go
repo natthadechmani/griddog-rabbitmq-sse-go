@@ -7,6 +7,7 @@ type Config struct {
 	Port              string
 	MySQLDSN          string
 	RabbitMQURL       string
+	MQTTBrokerURL     string
 	ProcessingBaseURL string
 }
 
@@ -25,6 +26,7 @@ func Load(defaultPort string) Config {
 		Port:              getenv("PORT", defaultPort),
 		MySQLDSN:          getenv("MYSQL_DSN", "root:rootpw@tcp(127.0.0.1:3306)/appdb?parseTime=true&multiStatements=true"),
 		RabbitMQURL:       getenv("RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:5672/"),
+		MQTTBrokerURL:     getenv("MQTT_URL", "tcp://127.0.0.1:1883"),
 		ProcessingBaseURL: getenv("PROCESSING_BASE_URL", "http://127.0.0.1:8081"),
 	}
 }

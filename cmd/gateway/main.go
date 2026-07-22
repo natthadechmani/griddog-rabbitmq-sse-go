@@ -7,6 +7,7 @@ import (
 
 	"griddog/internal/config"
 	"griddog/internal/db"
+	"griddog/internal/emqx"
 	"griddog/internal/gateway"
 	"griddog/internal/rabbitmq"
 )
@@ -37,6 +38,15 @@ func main() {
 	if err := srv.StartCompletedConsumer(context.Background()); err != nil {
 		log.Fatalf("completed consumer: %v", err)
 	}
+
+	// Flow 4 (MQTT/EMQX). Connect passing srv.OnMQTTConnect so the completed-topic
+	// subscription is (re)established on every connection; then arm the publish path.
+	mqttClient, err := emqx.Connect(cfg.MQTTBrokerURL, "griddog-gateway", srv.OnMQTTConnect)
+	if err != nil {
+		log.Fatalf("emqx: %v", err)
+	}
+	defer mqttClient.Disconnect(250)
+	srv.SetMQTT(mqttClient)
 
 	addr := ":" + cfg.Port
 	log.Printf("gateway-backend listening on %s", addr)

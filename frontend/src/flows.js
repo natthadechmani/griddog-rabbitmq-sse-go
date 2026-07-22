@@ -24,6 +24,18 @@ export const FLOWS = {
       { key: 'response_out', service: 'gateway', title: 'Gateway responds', detail: 'returns to browser, logs response_out', match: { service: 'gateway', stage: 'response_out' } },
     ],
   },
+  mqtt: {
+    title: 'Flow 4 — MQTT (EMQX) round-trip',
+    endpoint: 'POST /api/mqtt-call',
+    steps: [
+      { key: 'request_in', service: 'gateway', title: 'Gateway receives request', detail: 'logs request_in → MySQL', match: { service: 'gateway', stage: 'request_in' } },
+      { key: 'topic_published', service: 'emqx', title: 'Publish requests topic', detail: 'gateway → griddog/mqtt/requests, logs topic_published', match: { service: 'gateway', stage: 'topic_published' } },
+      { key: 'topic_consumed', service: 'processing', title: 'Processing consumes', detail: 'subscribes griddog/mqtt/requests, logs topic_consumed', match: { service: 'processing', stage: 'topic_consumed' } },
+      { key: 'completed_published', service: 'emqx', title: 'Enrich + publish completed topic', detail: 'value*2, squared… logs completed_published', match: { service: 'processing', stage: 'completed_published' } },
+      { key: 'completed_consumed', service: 'gateway', title: 'Gateway consumes reply', detail: 'subscribes griddog/mqtt/completed, logs completed_consumed', match: { service: 'gateway', stage: 'completed_consumed' } },
+      { key: 'response_out', service: 'gateway', title: 'Gateway responds', detail: 'returns to browser, logs response_out', match: { service: 'gateway', stage: 'response_out' } },
+    ],
+  },
   http: {
     title: 'Flow 3 — HTTP call',
     endpoint: 'POST /api/http-call',

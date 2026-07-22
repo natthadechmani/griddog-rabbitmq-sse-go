@@ -57,6 +57,26 @@ services:
       timeout: 10s
       retries: 20
 
+  # EMQX MQTT broker for flow 4 (gateway -> griddog/mqtt/requests -> processing ->
+  # griddog/mqtt/completed -> gateway). No Datadog Autodiscovery labels yet — the
+  # EMQX<->Datadog integration is a later phase.
+  emqx:
+    image: emqx/emqx-enterprise:6.2.2
+    hostname: node1.emqx.com
+    environment:
+      EMQX_NODE_NAME: "emqx@node1.emqx.com"
+    ports:
+      - "1883:1883"   # MQTT
+      - "8083:8083"   # MQTT over WebSocket
+      - "8084:8084"   # MQTT over WSS
+      - "8883:8883"   # MQTT over TLS
+      - "18083:18083" # dashboard (default login admin/public)
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 25s
+      retries: 5
+
   gateway-backend:
     build:
       context: .
@@ -67,6 +87,7 @@ services:
       PORT: "8080"
       MYSQL_DSN: "root:rootpw@tcp(mysql:3306)/appdb?parseTime=true&multiStatements=true"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      MQTT_URL: "tcp://emqx:1883"
       PROCESSING_BASE_URL: "http://processing-backend:8081"
       # --- Datadog (orchestrion auto-instrumentation reports to the agent) ---
       DD_AGENT_HOST: datadog-agent
@@ -90,6 +111,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      emqx:
+        condition: service_healthy
       datadog-agent:
         condition: service_started
 
@@ -103,6 +126,7 @@ services:
       PORT: "8081"
       MYSQL_DSN: "root:rootpw@tcp(mysql:3306)/appdb?parseTime=true&multiStatements=true"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      MQTT_URL: "tcp://emqx:1883"
       # --- Datadog (orchestrion auto-instrumentation reports to the agent) ---
       DD_AGENT_HOST: datadog-agent
       DD_ENV: "${DD_ENV:-sandbox}"
@@ -124,6 +148,8 @@ services:
       mysql:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      emqx:
         condition: service_healthy
       datadog-agent:
         condition: service_started

@@ -8,6 +8,7 @@
   --gateway: #3b82f6;
   --processing: #22c55e;
   --rabbitmq: #f59e0b;
+  --emqx: #14b8a6;
   --browser: #94a3b8;
   --mysql: #a855f7;
 }
@@ -79,6 +80,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .svc-border-gateway { border-left-color: var(--gateway); }
 .svc-border-processing { border-left-color: var(--processing); }
 .svc-border-rabbitmq { border-left-color: var(--rabbitmq); }
+.svc-border-emqx { border-left-color: var(--emqx); }
 .svc-border-browser { border-left-color: var(--browser); }
 
 .step-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
@@ -98,6 +100,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .svc-gateway { background: var(--gateway); color: white; }
 .svc-processing { background: var(--processing); color: #06210f; }
 .svc-rabbitmq { background: var(--rabbitmq); color: #2a1a00; }
+.svc-emqx { background: var(--emqx); color: #05201b; }
 .svc-browser { background: var(--browser); color: #0b1220; }
 
 /* Panels */

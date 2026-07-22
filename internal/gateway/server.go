@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"griddog/internal/config"
@@ -12,23 +13,31 @@ import (
 
 // Server holds the gateway-backend dependencies.
 type Server struct {
-	cfg     config.Config
-	db      *sql.DB
-	ch      *amqp.Channel
-	pending *pendingRegistry
-	client  *http.Client // no timeout: used for the long-lived SSE proxy
+	cfg         config.Config
+	db          *sql.DB
+	ch          *amqp.Channel
+	pending     *pendingRegistry
+	mqtt        mqtt.Client      // flow 4: EMQX publish path (armed via SetMQTT after Connect)
+	mqttPending *pendingRegistry // flow 4: correlation waiters for completed-topic replies
+	client      *http.Client     // no timeout: used for the long-lived SSE proxy
 }
 
-// NewServer builds a gateway-backend server.
+// NewServer builds a gateway-backend server. The MQTT client is attached later via
+// SetMQTT (see cmd/gateway/main.go) because emqx.Connect needs the server's
+// OnMQTTConnect handler, creating a chicken-and-egg with the client field.
 func NewServer(cfg config.Config, database *sql.DB, ch *amqp.Channel) *Server {
 	return &Server{
-		cfg:     cfg,
-		db:      database,
-		ch:      ch,
-		pending: newPendingRegistry(),
-		client:  &http.Client{},
+		cfg:         cfg,
+		db:          database,
+		ch:          ch,
+		pending:     newPendingRegistry(),
+		mqttPending: newPendingRegistry(),
+		client:      &http.Client{},
 	}
 }
+
+// SetMQTT attaches the connected EMQX client so the request path can publish.
+func (s *Server) SetMQTT(client mqtt.Client) { s.mqtt = client }
 
 // Routes returns the HTTP handler for the gateway-backend (browser-facing).
 func (s *Server) Routes() http.Handler {
@@ -36,6 +45,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/sse-call", s.handleSSECall)
 	mux.HandleFunc("POST /api/rabbitmq-call", s.handleRabbitMQCall)
+	mux.HandleFunc("POST /api/mqtt-call", s.handleMQTTCall)
 	mux.HandleFunc("POST /api/http-call", s.handleHTTPCall)
 	mux.HandleFunc("GET /api/messages", s.handleMessages)
 	return withCORS(mux)

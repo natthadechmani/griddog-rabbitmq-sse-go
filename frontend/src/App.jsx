@@ -96,9 +96,16 @@ export default function App() {
   const [httpRes, setHttpRes] = useState(null)
   const [httpDone, setHttpDone] = useState([])
 
+  // Flow 4 (MQTT / EMQX)
+  const [mqttStatus, setMqttStatus] = useState('idle')
+  const [mqttReq, setMqttReq] = useState(null)
+  const [mqttRes, setMqttRes] = useState(null)
+  const [mqttDone, setMqttDone] = useState([])
+
   // DB viewers
   const [rmqRows, setRmqRows] = useState([])
   const [httpRows, setHttpRows] = useState([])
+  const [mqttRows, setMqttRows] = useState([])
 
   function runSSE() {
     setSseStatus('running')
@@ -142,6 +149,7 @@ export default function App() {
   const sseStates = computeSSEStates(sseStatus, sseCounts.length)
   const rmqStates = computeStepStates(FLOWS.rabbitmq.steps, rmqStatus, rmqDone)
   const httpStates = computeStepStates(FLOWS.http.steps, httpStatus, httpDone)
+  const mqttStates = computeStepStates(FLOWS.mqtt.steps, mqttStatus, mqttDone)
 
   return (
     <div className="app">
@@ -149,13 +157,14 @@ export default function App() {
         <h1>Griddog · RabbitMQ + SSE + MySQL</h1>
         <p className="muted">
           Two Go services — <b>gateway-backend</b> ⇄ <b>processing-backend</b> — over RabbitMQ (AMQP),
-          HTTP and SSE, persisting every hop to MySQL.
+          MQTT (EMQX), HTTP and SSE, persisting every hop to MySQL.
         </p>
         <div className="legend">
           <span className="svc svc-browser">browser</span>
           <span className="svc svc-gateway">gateway</span>
           <span className="svc svc-processing">processing</span>
           <span className="svc svc-rabbitmq">rabbitmq</span>
+          <span className="svc svc-emqx">emqx</span>
         </div>
       </header>
 
@@ -214,6 +223,24 @@ export default function App() {
         </div>
       </section>
 
+      {/* Flow 4 */}
+      <section className="card">
+        <div className="card-head">
+          <h2>{FLOWS.mqtt.title}</h2>
+          <code className="endpoint">{FLOWS.mqtt.endpoint}</code>
+          <button
+            onClick={() => runFlow('mqtt', '/mqtt-call', setMqttStatus, setMqttReq, setMqttRes, setMqttDone, setMqttRows)}
+            disabled={mqttStatus === 'running'}
+          >Run MQTT</button>
+          <span className={`badge badge-${mqttStatus}`}>{mqttStatus}</span>
+        </div>
+        <FlowDiagram flow={FLOWS.mqtt} states={mqttStates} />
+        <div className="cols">
+          <div className="panel"><strong>Request</strong><JsonBlock value={mqttReq} /></div>
+          <div className="panel"><strong>Response</strong><JsonBlock value={mqttRes} /></div>
+        </div>
+      </section>
+
       {/* DB viewer */}
       <section className="card">
         <div className="card-head"><h2>Database · message_logs</h2></div>
@@ -232,6 +259,13 @@ export default function App() {
               <button onClick={async () => setHttpRows(await getMessages('http'))}>Refresh Flow 3</button>
             </div>
             <MessagesTable rows={httpRows} />
+          </div>
+          <div className="panel">
+            <div className="panel-head">
+              <strong>Flow 4 (mqtt)</strong>
+              <button onClick={async () => setMqttRows(await getMessages('mqtt'))}>Refresh Flow 4</button>
+            </div>
+            <MessagesTable rows={mqttRows} />
           </div>
         </div>
       </section>
