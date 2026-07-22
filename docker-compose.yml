@@ -1,6 +1,9 @@
 services:
   datadog-agent:
-    image: registry.datadoghq.com/agent:latest
+    # Custom image = base agent + the datadog-emqx integrations-extras check.
+    build:
+      context: .
+      dockerfile: deploy/datadog-agent/Dockerfile
     environment:
       - DD_API_KEY=${DD_API_KEY}
       - DD_SITE=${DD_SITE:-datadoghq.com}
@@ -58,19 +61,25 @@ services:
       retries: 20
 
   # EMQX MQTT broker for flow 4 (gateway -> griddog/mqtt/requests -> processing ->
-  # griddog/mqtt/completed -> gateway). No Datadog Autodiscovery labels yet — the
-  # EMQX<->Datadog integration is a later phase.
+  # griddog/mqtt/completed -> gateway).
   emqx:
     image: emqx/emqx-enterprise:6.2.2
     hostname: node1.emqx.com
     environment:
       EMQX_NODE_NAME: "emqx@node1.emqx.com"
+    labels:
+      # Datadog Autodiscovery: run the datadog-emqx integration (installed into the
+      # custom agent image) against EMQX's Prometheus/OpenMetrics endpoint. %%host%%
+      # resolves to the container IP; mode=all_nodes_aggregated gives a unified
+      # cluster view. Mirrors the rabbitmq integration.
+      com.datadoghq.ad.checks: '{"emqx": {"init_config": {}, "instances": [{"openmetrics_endpoint": "http://%%host%%:18083/api/v5/prometheus/stats?mode=all_nodes_aggregated"}]}}'
+      com.datadoghq.ad.logs: '[{"source": "emqx", "service": "emqx"}]'
     ports:
       - "1883:1883"   # MQTT
       - "8083:8083"   # MQTT over WebSocket
       - "8084:8084"   # MQTT over WSS
       - "8883:8883"   # MQTT over TLS
-      - "18083:18083" # dashboard (default login admin/public)
+      - "18083:18083" # dashboard (default login admin/public) + Prometheus API
     healthcheck:
       test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
       interval: 5s
