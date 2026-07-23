@@ -31,6 +31,46 @@ const (
 	QoS = byte(1)
 )
 
+// Trace carries W3C trace context across the MQTT hop as MQTT 5.0 User Properties
+// (traceparent/tracestate). It is propagation only — EMQX authors the broker spans;
+// the app just passes the context through so those spans join the caller's trace.
+// The zero value means "nothing to propagate".
+type Trace struct {
+	Traceparent string
+	Tracestate  string
+}
+
+func (t Trace) empty() bool { return t.Traceparent == "" }
+
+// pubProperties renders the trace context as MQTT 5.0 publish User Properties, or nil.
+//
+// NOTE: we deliberately send ONLY `traceparent`, not `tracestate`. EMQX 6.2.2 fails to
+// parse dd-trace-go's tracestate value (`dd=s:1;p:...;t.dm:-1;t.tid:...`, which contains
+// ':' and ';' inside the value) and, on that parse failure, discards the ENTIRE inbound
+// trace context — so the message isn't traced and EMQX won't adopt our trace id. The
+// traceparent alone carries the trace id, parent span id, and sampled flag, which is all
+// EMQX needs to continue (adopt) the trace. (Verified: traceparent-only is adopted;
+// traceparent+dd-tracestate is not.)
+func (t Trace) pubProperties() *paho.PublishProperties {
+	if t.empty() {
+		return nil
+	}
+	up := paho.UserProperties{}
+	up.Add("traceparent", t.Traceparent)
+	return &paho.PublishProperties{User: up}
+}
+
+// traceFromPacket reads the W3C trace context from an inbound PUBLISH's User Properties.
+func traceFromPacket(p *paho.Publish) Trace {
+	if p == nil || p.Properties == nil {
+		return Trace{}
+	}
+	return Trace{
+		Traceparent: p.Properties.User.Get("traceparent"),
+		Tracestate:  p.Properties.User.Get("tracestate"),
+	}
+}
+
 // Handlers bundles the two server-supplied callbacks that autopaho needs at
 // construction time (OnConnectionUp and the inbound-PUBLISH router are wired into the
 // ClientConfig before the ConnectionManager exists).
@@ -39,8 +79,9 @@ type Handlers struct {
 	// the caller can (re)subscribe. Replaces the v3 mqtt.OnConnectHandler.
 	OnConnectionUp func(cm *autopaho.ConnectionManager)
 	// OnMessage is the single inbound-PUBLISH router. payload is owned by paho; copy it
-	// if it is retained past the call (both callers do).
-	OnMessage func(topic string, payload []byte)
+	// if it is retained past the call (both callers do). tr carries any propagated W3C
+	// trace context from the message's User Properties.
+	OnMessage func(topic string, payload []byte, tr Trace)
 }
 
 // Connect dials EMQX over MQTT 5.0 and returns a connected ConnectionManager. autopaho
@@ -84,7 +125,7 @@ func Connect(ctx context.Context, brokerURL, clientID string, h Handlers) (*auto
 			// returns — same fire-and-forget semantics as the v3 client.
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(pr paho.PublishReceived) (bool, error) {
-					h.OnMessage(pr.Packet.Topic, pr.Packet.Payload)
+					h.OnMessage(pr.Packet.Topic, pr.Packet.Payload, traceFromPacket(pr.Packet))
 					return true, nil
 				},
 			},
@@ -112,17 +153,18 @@ func Connect(ctx context.Context, brokerURL, clientID string, h Handlers) (*auto
 // Publish does not itself wait for connectivity, so AwaitConnection first preserves the
 // old WaitTimeout(5s) "wait for the broker" behaviour instead of failing instantly
 // during a reconnect.
-func Publish(ctx context.Context, cm *autopaho.ConnectionManager, topic string, body []byte) error {
+func Publish(ctx context.Context, cm *autopaho.ConnectionManager, topic string, body []byte, tr Trace) error {
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := cm.AwaitConnection(pctx); err != nil {
 		return fmt.Errorf("mqtt publish %s: connection down: %w", topic, err)
 	}
 	if _, err := cm.Publish(pctx, &paho.Publish{
-		Topic:   topic,
-		QoS:     QoS,
-		Retain:  false,
-		Payload: body,
+		Topic:      topic,
+		QoS:        QoS,
+		Retain:     false,
+		Payload:    body,
+		Properties: tr.pubProperties(), // carries W3C traceparent as MQTT 5.0 User Property (or nil)
 	}); err != nil {
 		return fmt.Errorf("mqtt publish %s: %w", topic, err)
 	}

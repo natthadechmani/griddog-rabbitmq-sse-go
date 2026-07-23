@@ -13,6 +13,7 @@ import (
 	"griddog/internal/emqx"
 	"griddog/internal/logx"
 	"griddog/internal/models"
+	"griddog/internal/tracing"
 )
 
 // OnMQTTConnect (re)establishes the processing subscription to the requests topic.
@@ -33,17 +34,21 @@ func (s *Server) OnMQTTConnect(cm *autopaho.ConnectionManager) {
 // handleMQTTRequest runs on autopaho's inbound router, so it must return quickly. It
 // copies the payload and hands the work to a goroutine — processMQTT does a DB write
 // AND a publish, which shouldn't run on the router goroutine.
-func (s *Server) handleMQTTRequest(_ string, payload []byte) {
+func (s *Server) handleMQTTRequest(_ string, payload []byte, tr emqx.Trace) {
 	p := append([]byte(nil), payload...)
-	go s.processMQTT(p)
+	go s.processMQTT(p, tr)
 }
 
 // processMQTT enriches a task and republishes it to the completed topic — the MQTT
 // analog of handleDelivery, minus the tracing. There is no ambient span here (the MQTT
 // client is not auto-instrumented), so the InsertLog calls below are standalone MySQL
 // traces; that is expected for this phase.
-func (s *Server) processMQTT(payload []byte) {
-	ctx := context.Background()
+func (s *Server) processMQTT(payload []byte, tr emqx.Trace) {
+	// Continue the gateway's trace: turn the traceparent EMQX forwarded on delivery into
+	// a consume span, so processing's work (DB writes + reply publish) joins the same
+	// end-to-end Datadog trace instead of being an orphan.
+	span, ctx := tracing.StartConsumeSpan("mqtt.process", "consume "+emqx.RequestTopic, tr)
+	defer span.Finish()
 
 	var task models.Task
 	if err := json.Unmarshal(payload, &task); err != nil || task.CorrelationID == "" {
@@ -69,7 +74,9 @@ func (s *Server) processMQTT(payload []byte) {
 	}
 	body, _ := json.Marshal(enriched)
 
-	if err := emqx.Publish(ctx, s.mqtt, emqx.CompletedTopic, body); err != nil {
+	// Publish the reply carrying THIS consume span's context, so the completed-topic
+	// broker spans nest under processing (proper causal ordering within the trace).
+	if err := emqx.Publish(ctx, s.mqtt, emqx.CompletedTopic, body, tracing.Inject(ctx)); err != nil {
 		logx.Printf(ctx, "publish completed topic error corr=%s: %v", task.CorrelationID, err)
 		return
 	}

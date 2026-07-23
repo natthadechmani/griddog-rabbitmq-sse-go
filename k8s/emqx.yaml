@@ -25,6 +25,21 @@ spec:
           env:
             # Stable single-node name (loopback) so mnesia data isn't tied to the pod IP.
             - { name: EMQX_NODE_NAME, value: "emqx@127.0.0.1" }
+            # ---- Native OpenTelemetry tracing (k8s parity with docker-compose) ----
+            # Exports OTLP/gRPC to the node-local Datadog agent via the host IP (downward
+            # API). REQUIRES the DatadogAgent CR to enable OTLP gRPC ingestion (see
+            # k8s/datadog-agent.yaml, features.otlp) — the k8s equivalent of compose's
+            # DDOT collector. NOTE: not deployed/tested in this session (no cluster up).
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # legacy mode + traceparent-only (see docker-compose.yml + internal/emqx) so
+            # EMQX adopts the gateway's injected W3C traceparent -> one merged Datadog trace.
+            - { name: EMQX_OPENTELEMETRY__EXPORTER__ENDPOINT, value: '"http://$(HOST_IP):4317"' }
+            - { name: EMQX_OPENTELEMETRY__TRACES__ENABLE, value: "true" }
+            - { name: EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_MODE, value: "legacy" }
+            - { name: EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_ALL, value: "false" }
           ports:
             - { containerPort: 1883 }    # MQTT (apps connect here)
             - { containerPort: 18083 }   # dashboard (default login admin/public)

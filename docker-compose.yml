@@ -15,15 +15,20 @@ services:
       - 'DD_CONTAINER_LABELS_AS_TAGS={"my.custom.label.team":"team"}'
       - DD_APM_NON_LOCAL_TRAFFIC=true
       - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_ENV=${DD_ENV:-sandbox}        # env tag for EMQX OTel spans (datadog exporter)
+      - DD_OTELCOLLECTOR_ENABLED=true    # run the embedded DDOT collector (otel-config.yaml)
     pid: "host"
     ports:
       - "8126:8126/tcp"
       - "8125:8125/udp"
+      - "4317:4317/tcp"                  # OTLP gRPC — EMQX native OTel traces
+      - "4318:4318/tcp"                  # OTLP HTTP
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./deploy/datadog-agent/otel-config.yaml:/etc/datadog-agent/otel-config.yaml:ro
 
   mysql:
     image: mysql:8
@@ -67,6 +72,22 @@ services:
     hostname: node1.emqx.com
     environment:
       EMQX_NODE_NAME: "emqx@node1.emqx.com"
+      # ---- Native OpenTelemetry tracing -> DDOT collector in the agent ----
+      # EMQX emits its own spans and exports them via OTLP/gRPC. In `legacy` trace mode
+      # (trace_all=false) EMQX ADOPTS the W3C traceparent the gateway injects as an MQTT 5.0
+      # User Property, so its process_message/send_published_message spans join the gateway's
+      # Datadog trace = ONE merged end-to-end trace. Endpoint is double-quoted (YAML+HOCON)
+      # because of the ':'. In EMQX 6.2.2 these keys live under traces.FILTER.*.
+      #
+      # Two hard-won requirements for the merge (see internal/emqx/emqx.go):
+      #  1. Propagate ONLY `traceparent`, NOT `tracestate` — EMQX 6.2.2 fails to parse
+      #     dd-trace-go's tracestate (`dd=s:1;...`) and then drops the whole trace context.
+      #  2. Use `legacy` mode. `e2e` mode self-roots its own trace id (does NOT adopt the
+      #     inbound traceparent), producing a richer broker span tree but as a SEPARATE trace.
+      EMQX_OPENTELEMETRY__EXPORTER__ENDPOINT: '"http://datadog-agent:4317"'
+      EMQX_OPENTELEMETRY__TRACES__ENABLE: "true"
+      EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_MODE: "legacy"
+      EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_ALL: "false"
     labels:
       # Datadog Autodiscovery: run the datadog-emqx integration (installed into the
       # custom agent image) against EMQX's Prometheus/OpenMetrics endpoint. %%host%%

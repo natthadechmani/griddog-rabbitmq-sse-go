@@ -24,8 +24,14 @@ spec:
     logCollection:                   # Enable Log Collection
       enabled: true
       containerCollectAll: true      # Disable to Collect Logs from Container Labels instead of All https://docs.datadoghq.com/agent/basic_agent_usage/kubernetes/#log-collection-setup
-    liveProcessCollection:        
+    liveProcessCollection:
       enabled: true
+    otlp:                            # k8s equivalent of compose's DDOT: ingest EMQX native OTel traces.
+      receiver:                      # EMQX pods export to the node agent via host IP:4317 (see emqx.yaml HOST_IP).
+        protocols:
+          grpc:
+            enabled: true
+            endpoint: 0.0.0.0:4317   # NOTE: not deployed/tested this session; verify against your operator version.
   override:
     nodeAgent:
       # hostname auto-detection (GCE/EC2/Azure/kubelet nodename) can fail

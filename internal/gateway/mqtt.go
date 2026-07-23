@@ -17,6 +17,7 @@ import (
 	"griddog/internal/httpx"
 	"griddog/internal/logx"
 	"griddog/internal/models"
+	"griddog/internal/tracing"
 )
 
 // OnMQTTConnect (re)establishes the gateway's subscription to the completed topic. It
@@ -38,7 +39,7 @@ func (s *Server) OnMQTTConnect(cm *autopaho.ConnectionManager) {
 // correlation id, which (unlike AMQP's CorrelationId property) is read from the JSON
 // payload. It runs on autopaho's inbound router; it is O(1) and never blocks (deliver
 // sends on a cap-1 buffered channel), so no goroutine dispatch.
-func (s *Server) handleMQTTCompleted(topic string, payload []byte) {
+func (s *Server) handleMQTTCompleted(topic string, payload []byte, _ emqx.Trace) {
 	var enriched models.EnrichedTask
 	if err := json.Unmarshal(payload, &enriched); err != nil || enriched.CorrelationID == "" {
 		log.Printf("mqtt completed: bad/empty payload on %s: %v", topic, err)
@@ -77,7 +78,9 @@ func (s *Server) handleMQTTCall(w http.ResponseWriter, r *http.Request) {
 	replyCh := s.mqttPending.register(corrID)
 
 	body, _ := json.Marshal(task)
-	if err := emqx.Publish(ctx, s.mqtt, emqx.RequestTopic, body); err != nil {
+	// Inject the active (Orchestrion net/http) span's W3C traceparent so EMQX parents its
+	// broker spans under this request's Datadog trace (end-to-end correlation, phase 2).
+	if err := emqx.Publish(ctx, s.mqtt, emqx.RequestTopic, body, tracing.Inject(ctx)); err != nil {
 		s.mqttPending.cancel(corrID)
 		logx.Printf(ctx, "mqtt publish error: %v", err)
 		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "publish failed"})
