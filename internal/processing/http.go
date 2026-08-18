@@ -1,9 +1,10 @@
 package processing
 
 import (
-	"log"
 	"net/http"
 	"time"
+
+	logger "github.com/natthadechmani/go-log-correlation"
 
 	"griddog/internal/db"
 	"griddog/internal/httpx"
@@ -20,10 +21,10 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	log.Printf("flow3 /process received correlation_id=%s value=%d", task.CorrelationID, task.Value)
+	logger.Printf(ctx,"flow3 /process received correlation_id=%s value=%d", task.CorrelationID, task.Value)
 
 	if err := db.InsertLog(ctx, s.db, "http", task.CorrelationID, "processing", "request_in", task); err != nil {
-		log.Printf("flow3 processing request_in log error: %v", err)
+		logger.Printf(ctx,"flow3 processing request_in log error: %v", err)
 	}
 
 	result := models.EnrichedTask{
@@ -38,7 +39,7 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"correlation_id": task.CorrelationID, "result": result}
 
 	if err := db.InsertLog(ctx, s.db, "http", task.CorrelationID, "processing", "response_out", resp); err != nil {
-		log.Printf("flow3 processing response_out log error: %v", err)
+		logger.Printf(ctx,"flow3 processing response_out log error: %v", err)
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, resp)

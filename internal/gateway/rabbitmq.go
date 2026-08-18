@@ -3,13 +3,13 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"math/rand"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	logger "github.com/natthadechmani/go-log-correlation"
 	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 	"griddog/internal/db"
@@ -62,9 +62,9 @@ func (p *pendingRegistry) cancel(id string) {
 // both; this handler only resolves the waiter.
 func (s *Server) StartCompletedConsumer(ctx context.Context) error {
 	go func() {
-		log.Printf("gateway-backend consuming %s", queues.Completed)
+		logger.Printf(ctx,"gateway-backend consuming %s", queues.Completed)
 		if err := s.mq.Consume(ctx, queues.Completed, s.handleCompleted); err != nil {
-			log.Printf("completed consumer stopped: %v", err)
+			logger.Printf(ctx,"completed consumer stopped: %v", err)
 		}
 	}()
 	return nil
@@ -74,7 +74,7 @@ func (s *Server) StartCompletedConsumer(ctx context.Context) error {
 // Returning nil Acks the delivery (the library owns ack/nack).
 func (s *Server) handleCompleted(ctx context.Context, d messaging.Delivery) error {
 	if !s.pending.deliver(d.CorrelationId, d.Body) {
-		log.Printf("no waiter for correlation_id=%s", d.CorrelationId)
+		logger.Printf(ctx,"no waiter for correlation_id=%s", d.CorrelationId)
 	}
 	return nil
 }
@@ -96,11 +96,11 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 	corrID := uuid.NewString()
 	task := models.Task{CorrelationID: corrID, Value: req.Value, CreatedAt: time.Now()}
 
-	log.Printf("flow2 rabbitmq-call received value=%d correlation_id=%s", req.Value, corrID)
+	logger.Printf(ctx,"flow2 rabbitmq-call received value=%d correlation_id=%s", req.Value, corrID)
 
 	// log the API request (req)
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "request_in", map[string]any{"value": req.Value}); err != nil {
-		log.Printf("request_in log error: %v", err)
+		logger.Printf(ctx,"request_in log error: %v", err)
 	}
 
 	// register the waiter BEFORE publishing to avoid a race with a fast reply
@@ -115,7 +115,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 	}
 	// log the queue message
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "queue_published", task); err != nil {
-		log.Printf("queue_published log error: %v", err)
+		logger.Printf(ctx,"queue_published log error: %v", err)
 	}
 
 	select {
@@ -124,7 +124,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(replyBody, &enriched)
 		// message in (consumed from completed-queue)
 		if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "completed_consumed", enriched); err != nil {
-			log.Printf("completed_consumed log error: %v", err)
+			logger.Printf(ctx,"completed_consumed log error: %v", err)
 		}
 		resp := map[string]any{
 			"correlation_id": corrID,
@@ -133,7 +133,7 @@ func (s *Server) handleRabbitMQCall(w http.ResponseWriter, r *http.Request) {
 		}
 		// message out (response to browser)
 		if err := db.InsertLog(ctx, s.db, "rabbitmq", corrID, "gateway", "response_out", resp); err != nil {
-			log.Printf("response_out log error: %v", err)
+			logger.Printf(ctx,"response_out log error: %v", err)
 		}
 		httpx.WriteJSON(w, http.StatusOK, resp)
 	case <-time.After(15 * time.Second):

@@ -4,7 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 
+	logger "github.com/natthadechmani/go-log-correlation"
 	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 	"griddog/internal/config"
@@ -15,6 +17,10 @@ import (
 
 func main() {
 	cfg := config.Load("8081")
+
+	// Route request logs through the shared logging library: JSON output with Datadog
+	// trace correlation (dd.trace_id/dd.span_id stamped from the active span in ctx).
+	logger.SetDefault(logger.NewLogger(os.Stdout))
 
 	database, err := db.Connect(cfg.MySQLDSN)
 	if err != nil {

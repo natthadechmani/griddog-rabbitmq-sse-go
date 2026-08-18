@@ -3,9 +3,9 @@ package processing
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
+	logger "github.com/natthadechmani/go-log-correlation"
 	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 	"griddog/internal/db"
@@ -18,9 +18,9 @@ import (
 // consume span + inbound DSM checkpoint, and ack/nack; we just supply the handler.
 func (s *Server) StartConsumer(ctx context.Context) error {
 	go func() {
-		log.Printf("processing-backend consuming %s", queues.Processing)
+		logger.Printf(ctx,"processing-backend consuming %s", queues.Processing)
 		if err := s.mq.Consume(ctx, queues.Processing, s.handleDelivery); err != nil {
-			log.Printf("consumer stopped: %v", err)
+			logger.Printf(ctx,"consumer stopped: %v", err)
 		}
 	}()
 	return nil
@@ -32,18 +32,18 @@ func (s *Server) StartConsumer(ctx context.Context) error {
 func (s *Server) handleDelivery(ctx context.Context, d messaging.Delivery) error {
 	var task models.Task
 	if err := json.Unmarshal(d.Body, &task); err != nil {
-		log.Printf("bad task message: %v", err)
+		logger.Printf(ctx,"bad task message: %v", err)
 		return nil // drop malformed message (Ack) — avoid a poison requeue loop
 	}
 	if task.CorrelationID == "" {
 		task.CorrelationID = d.CorrelationId
 	}
 
-	log.Printf("flow2 consumed correlation_id=%s value=%d", task.CorrelationID, task.Value)
+	logger.Printf(ctx,"flow2 consumed correlation_id=%s value=%d", task.CorrelationID, task.Value)
 
 	// message in
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", task.CorrelationID, "processing", "queue_consumed", task); err != nil {
-		log.Printf("queue_consumed log error: %v", err)
+		logger.Printf(ctx,"queue_consumed log error: %v", err)
 	}
 
 	// enrich / manipulate the message
@@ -60,13 +60,13 @@ func (s *Server) handleDelivery(ctx context.Context, d messaging.Delivery) error
 
 	// span + DSM checkpoint happen inside Publish; ctx keeps trace + pathway connected.
 	if err := s.mq.Publish(ctx, "", queues.Completed, task.CorrelationID, body); err != nil {
-		log.Printf("publish completed-queue error: %v", err)
+		logger.Printf(ctx,"publish completed-queue error: %v", err)
 		return err // Nack + requeue for another attempt
 	}
 
 	// message out
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", task.CorrelationID, "processing", "completed_published", enriched); err != nil {
-		log.Printf("completed_published log error: %v", err)
+		logger.Printf(ctx,"completed_published log error: %v", err)
 	}
 	return nil
 }
