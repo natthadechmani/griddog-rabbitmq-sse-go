@@ -9,7 +9,6 @@ import (
 	messaging "github.com/natthadechmani/go-rabbitmq-messaging"
 
 	"griddog/internal/db"
-	"griddog/internal/logx"
 	"griddog/internal/models"
 	"griddog/internal/queues"
 )
@@ -33,18 +32,18 @@ func (s *Server) StartConsumer(ctx context.Context) error {
 func (s *Server) handleDelivery(ctx context.Context, d messaging.Delivery) error {
 	var task models.Task
 	if err := json.Unmarshal(d.Body, &task); err != nil {
-		logx.Printf(ctx, "bad task message: %v", err)
+		log.Printf("bad task message: %v", err)
 		return nil // drop malformed message (Ack) — avoid a poison requeue loop
 	}
 	if task.CorrelationID == "" {
 		task.CorrelationID = d.CorrelationId
 	}
 
-	logx.Printf(ctx, "flow2 consumed correlation_id=%s value=%d", task.CorrelationID, task.Value)
+	log.Printf("flow2 consumed correlation_id=%s value=%d", task.CorrelationID, task.Value)
 
 	// message in
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", task.CorrelationID, "processing", "queue_consumed", task); err != nil {
-		logx.Printf(ctx, "queue_consumed log error: %v", err)
+		log.Printf("queue_consumed log error: %v", err)
 	}
 
 	// enrich / manipulate the message
@@ -61,13 +60,13 @@ func (s *Server) handleDelivery(ctx context.Context, d messaging.Delivery) error
 
 	// span + DSM checkpoint happen inside Publish; ctx keeps trace + pathway connected.
 	if err := s.mq.Publish(ctx, "", queues.Completed, task.CorrelationID, body); err != nil {
-		logx.Printf(ctx, "publish completed-queue error: %v", err)
+		log.Printf("publish completed-queue error: %v", err)
 		return err // Nack + requeue for another attempt
 	}
 
 	// message out
 	if err := db.InsertLog(ctx, s.db, "rabbitmq", task.CorrelationID, "processing", "completed_published", enriched); err != nil {
-		logx.Printf(ctx, "completed_published log error: %v", err)
+		log.Printf("completed_published log error: %v", err)
 	}
 	return nil
 }
