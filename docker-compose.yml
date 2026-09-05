@@ -16,16 +16,9 @@ services:
       - DD_APM_NON_LOCAL_TRAFFIC=true
       - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
       - DD_ENV=${DD_ENV:-sandbox}
-      # ---- EMQX native-OTel traces: the agent's BUILT-IN OTLP ingestion ----
-      # EMQX exports its spans over OTLP/gRPC straight to the Datadog Agent, which forwards
-      # them to APM. This is the core agent's own OTLP receiver (part of the trace-agent),
-      # NOT the DDOT embedded collector. DDOT (DD_OTELCOLLECTOR_ENABLED) is deliberately OFF:
-      # it's only supported on Kubernetes (Operator/Helm) and ECS Fargate — on docker-compose
-      # its otel-agent subprocess crash-loops on internal gRPC IPC TLS ("certificate signed
-      # by unknown authority" on :5001), which degraded the agent's APM/DSM pipeline and made
-      # RabbitMQ Data Streams disappear. The built-in OTLP receiver has no such subprocess/IPC,
-      # so it coexists cleanly with APM + DSM on :8126. EMQX + app spans share the traceparent
-      # trace_id, so Datadog stitches them into one end-to-end trace. Metrics unaffected.
+      # OTLP intake for EMQX's spans: the CORE agent's built-in receiver.
+      # Do NOT enable DDOT (DD_OTELCOLLECTOR_ENABLED) — k8s/ECS-Fargate only; on
+      # docker-compose it crash-loops on internal IPC TLS and takes APM + DSM with it.
       - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_GRPC_ENDPOINT=0.0.0.0:4317
       - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
     pid: "host"
@@ -63,10 +56,8 @@ services:
       - "15672:15672"
       - "15692:15692" # Prometheus plugin /metrics
     labels:
-      # Datadog Autodiscovery: run the rabbitmq integration against this container
-      # using the Prometheus plugin. %%host%% resolves to the container's IP; the
-      # detailed families add per-queue / per-exchange / per-node metrics that
-      # complement DSM. The agent picks these labels up via the docker socket.
+      # Datadog Autodiscovery (via docker socket): rabbitmq check on the Prometheus
+      # plugin. %%host%% = container IP; detailed families add per-queue/exchange metrics.
       com.datadoghq.ad.checks: '{"rabbitmq": {"init_config": {}, "instances": [{"prometheus_plugin": {"url": "http://%%host%%:15692", "unaggregated_endpoint": "detailed?family=queue_coarse_metrics&family=queue_consumer_count&family=channel_exchange_metrics&family=channel_queue_exchange_metrics&family=node_coarse_metrics"}}]}}'
       com.datadoghq.ad.logs: '[{"source": "rabbitmq", "service": "rabbitmq", "log_processing_rules": [{"type": "multi_line", "name": "logs_starts_with_equal_sign", "pattern": "="}]}]'
     healthcheck:
@@ -82,28 +73,45 @@ services:
     hostname: node1.emqx.com
     environment:
       EMQX_NODE_NAME: "emqx@node1.emqx.com"
-      # ---- Native OpenTelemetry tracing -> Datadog Agent (built-in OTLP intake) ----
-      # EMQX emits its own spans and exports them via OTLP/gRPC to the Datadog Agent's
-      # built-in OTLP receiver (:4317). In `legacy` trace mode (trace_all=false) EMQX ADOPTS
-      # the W3C traceparent the gateway injects as an MQTT 5.0 User Property, so its
-      # process_message/send_published_message spans join the gateway's Datadog trace = ONE
-      # merged end-to-end trace. Endpoint is double-quoted (YAML+HOCON) because of the ':'.
-      # In EMQX 6.2.2 these keys live under traces.FILTER.*.
-      #
-      # Two hard-won requirements for the merge (see internal/emqx/emqx.go):
-      #  1. Propagate ONLY `traceparent`, NOT `tracestate` — EMQX 6.2.2 fails to parse
-      #     dd-trace-go's tracestate (`dd=s:1;...`) and then drops the whole trace context.
-      #  2. Use `legacy` mode. `e2e` mode self-roots its own trace id (does NOT adopt the
-      #     inbound traceparent), producing a richer broker span tree but as a SEPARATE trace.
+      # EMQX exports its own OTel spans to the agent's OTLP receiver (:4317). Gotchas:
+      #  - endpoint is double-quoted (YAML + HOCON) because of the ':'
+      #  - in 6.2.2 these keys live under traces.FILTER.* (other paths -> unknown_env_vars)
+      #  - the app must inject ONLY `traceparent`, never `tracestate`: 6.2.2 can't parse
+      #    dd-trace-go's tracestate and drops the whole context (see internal/emqx/emqx.go)
+      #  - e2e = full broker tree (client.publish -> client.authz + message.route ->
+      #    broker.publish, 4 spans/hop vs legacy's 2) PLUS connect/subscribe lifecycle
+      #    traces. Leaner alternative: TRACE_MODE=legacy + TRACE_ALL=false.
       EMQX_OPENTELEMETRY__EXPORTER__ENDPOINT: '"http://datadog-agent:4317"'
       EMQX_OPENTELEMETRY__TRACES__ENABLE: "true"
-      EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_MODE: "legacy"
-      EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_ALL: "false"
+      EMQX_OPENTELEMETRY__TRACES__FILTER__TRACE_MODE: "e2e"
+      # follow_traceparent: THE flag that merges EMQX's spans into the app's trace. Without
+      # it e2e self-roots a separate trace. Never disable.
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__FOLLOW_TRACEPARENT: "true"
+      # client_messaging: the message path itself (client.publish/message.route/broker.publish).
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__CLIENT_MESSAGING: "true"
+      # on = client.connect + client.authn spans (per-connection, their own trace). Useful
+      # for auth/handshake debugging; set false to cut that noise.
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__CLIENT_CONNECT_DISCONNECT: "true"
+      # on = client.subscribe + client.authz_backend spans (shows which ACL matched).
+      # Set false to cut that noise.
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__CLIENT_SUBSCRIBE_UNSUBSCRIBE: "true"
+      # sample_ratio: % of traces sampled when no whitelist matches. 100% = deterministic
+      # demo; lower it to cut volume proportionally.
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__SAMPLE_RATIO: "100%"
+      # cluster_identifier: tagged onto every span as cluster.id.
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__CLUSTER_IDENTIFIER: "emqxcl"
+      # msg_trace_level: QoS-ACK spans only (message path unaffected). 0 = none,
+      # 1 = PUBACK/PUBREC, 2 = also PUBREL+PUBCOMP. We publish QoS 1, so 2 == 1 here.
+      EMQX_OPENTELEMETRY__TRACES__FILTER__E2E_TRACING_OPTIONS__MSG_TRACE_LEVEL: "0"
+      # max_queue_size: span batch buffer. CONCERN: when full, new spans are dropped
+      # SILENTLY until the next export — you get gaps in traces, not errors.
+      EMQX_OPENTELEMETRY__TRACES__MAX_QUEUE_SIZE: "50000"
+      # scheduled_delay: how often batches are EXPORTED (default 5s). Affects freshness in
+      # Datadog + how often the queue drains. Does NOT shift span timestamps.
+      EMQX_OPENTELEMETRY__TRACES__SCHEDULED_DELAY: "1s"
     labels:
-      # Datadog Autodiscovery: run the datadog-emqx integration (installed into the
-      # custom agent image) against EMQX's Prometheus/OpenMetrics endpoint. %%host%%
-      # resolves to the container IP; mode=all_nodes_aggregated gives a unified
-      # cluster view. Mirrors the rabbitmq integration.
+      # Datadog Autodiscovery: datadog-emqx check (installed in the custom agent image)
+      # on EMQX's Prometheus endpoint; all_nodes_aggregated = unified cluster view.
       com.datadoghq.ad.checks: '{"emqx": {"init_config": {}, "instances": [{"openmetrics_endpoint": "http://%%host%%:18083/api/v5/prometheus/stats?mode=all_nodes_aggregated"}]}}'
       com.datadoghq.ad.logs: '[{"source": "emqx", "service": "emqx"}]'
     ports:
