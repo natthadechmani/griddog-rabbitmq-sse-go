@@ -9,7 +9,9 @@ RUN go mod download
 COPY . .
 ARG SERVICE=gateway
 
-RUN go install github.com/DataDog/orchestrion@latest
+# Pinned (was @latest): orchestrion v1.13.0+ bundles contribs needing dd-trace-go v2.10+,
+# which conflicts with the v2.9.1 pinned in go.mod ("orchestrion pin" -> go mod tidy fails).
+RUN go install github.com/DataDog/orchestrion@v1.12.1
 RUN orchestrion pin
 RUN CGO_ENABLED=0 GOOS=linux orchestrion go build -trimpath -o /out/app ./cmd/${SERVICE}
 
